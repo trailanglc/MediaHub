@@ -25,7 +25,7 @@ func (s *Scheduler) Run(ctx context.Context) {
 	s.runTrashPurge(ctx)
 	s.runClosureRepair(ctx)
 
-	go s.loop(ctx, 15*time.Minute, "expire stale uploads", func(ctx context.Context) {
+	go s.runTicker(ctx, 15*time.Minute, "expire stale uploads", func(ctx context.Context) (int, error) {
 		n, err := s.Upload.ExpireStaleSessions(ctx)
 		if err != nil {
 			return 0, err
@@ -33,7 +33,7 @@ func (s *Scheduler) Run(ctx context.Context) {
 		return n, nil
 	})
 
-	go s.loop(ctx, 30*time.Second, "storage deletions", func(ctx context.Context) {
+	go s.runTicker(ctx, 30*time.Second, "storage deletions", func(ctx context.Context) (int, error) {
 		if n, err := s.DeletionRepo.RequeueStaleProcessing(ctx, 3*time.Minute); err != nil {
 			s.Log.Warn("requeue stale storage deletion jobs", zap.Error(err))
 		} else if n > 0 {
@@ -43,17 +43,17 @@ func (s *Scheduler) Run(ctx context.Context) {
 		return n, err
 	})
 
-	go s.loop(ctx, 24*time.Hour, "purge expired trash", func(ctx context.Context) {
+	go s.runTicker(ctx, 24*time.Hour, "purge expired trash", func(ctx context.Context) (int, error) {
 		n, err := s.Media.PurgeExpiredTrash(ctx)
 		return n, err
 	})
 
-	go s.loop(ctx, 24*time.Hour, "cleanup stale temp objects", func(ctx context.Context) {
+	go s.runTicker(ctx, 24*time.Hour, "cleanup stale temp objects", func(ctx context.Context) (int, error) {
 		n, err := s.StorageCleanup.CleanupStaleTempObjects(ctx)
 		return n, err
 	})
 
-	go s.loop(ctx, 24*time.Hour, "repair closure paths", func(ctx context.Context) {
+	go s.runTicker(ctx, 24*time.Hour, "repair closure paths", func(ctx context.Context) (int, error) {
 		n, err := s.MediaRepo.RepairClosurePaths(ctx)
 		return int(n), err
 	})
@@ -92,7 +92,7 @@ func (s *Scheduler) runClosureRepair(ctx context.Context) {
 	}
 }
 
-func (s *Scheduler) loop(
+func (s *Scheduler) runTicker(
 	ctx context.Context,
 	interval time.Duration,
 	name string,

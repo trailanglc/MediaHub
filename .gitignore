@@ -1,0 +1,26 @@
+# Environment
+backend/.env
+frontend/.env.local
+deployments/.env
+
+# Go
+backend/bin/
+*.exe
+*.test
+*.out
+
+# Node / Next.js
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+frontend/.pnpm-store/
+
+# OS / IDE
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Logs
+*.log

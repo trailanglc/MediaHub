@@ -1,0 +1,48 @@
+# E2E Playwright — chạy thủ công hoặc trên PR (optional).
+# Cần secrets: E2E_EMAIL, E2E_PASSWORD
+# Backend API phải chạy (PLAYWRIGHT_BASE_URL trỏ frontend; API qua .env.local)
+
+name: Frontend E2E
+
+on:
+  pull_request:
+    paths:
+      - "frontend/**"
+      - ".github/workflows/e2e-frontend.yml"
+  workflow_dispatch:
+
+jobs:
+  playwright:
+    name: Playwright
+    runs-on: ubuntu-latest
+    # Optional: không fail PR nếu chưa cấu hình secrets
+    continue-on-error: ${{ secrets.E2E_EMAIL == '' }}
+    defaults:
+      run:
+        working-directory: frontend
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Playwright browsers
+        run: pnpm exec playwright install chromium --with-deps
+
+      - name: Run E2E tests
+        env:
+          E2E_EMAIL: ${{ secrets.E2E_EMAIL }}
+          E2E_PASSWORD: ${{ secrets.E2E_PASSWORD }}
+          CI: "true"
+        run: pnpm run test:e2e

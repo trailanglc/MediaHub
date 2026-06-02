@@ -1,0 +1,9 @@
+DROP TABLE IF EXISTS audit_logs;
+DROP TABLE IF EXISTS convert_jobs;
+DROP TABLE IF EXISTS stream_policies;
+DROP TABLE IF EXISTS api_keys;
+DROP TABLE IF EXISTS permissions;
+DROP TABLE IF EXISTS video_assets;
+DROP TABLE IF EXISTS object_paths;
+DROP TABLE IF EXISTS media_objects;
+DROP TABLE IF EXISTS users;

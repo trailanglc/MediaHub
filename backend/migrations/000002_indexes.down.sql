@@ -1,0 +1,14 @@
+DROP INDEX IF EXISTS idx_audit_logs_created_at;
+DROP INDEX IF EXISTS idx_convert_jobs_status_created;
+DROP INDEX IF EXISTS idx_permissions_user_revoked;
+DROP INDEX IF EXISTS idx_permissions_resource;
+DROP INDEX IF EXISTS idx_permissions_user_resource;
+DROP INDEX IF EXISTS idx_video_assets_hls_status;
+DROP INDEX IF EXISTS idx_video_assets_object_id;
+DROP INDEX IF EXISTS idx_object_paths_ancestor;
+DROP INDEX IF EXISTS idx_object_paths_descendant;
+DROP INDEX IF EXISTS idx_media_objects_public_id;
+DROP INDEX IF EXISTS idx_media_objects_created_at;
+DROP INDEX IF EXISTS idx_media_objects_status;
+DROP INDEX IF EXISTS idx_media_objects_type;
+DROP INDEX IF EXISTS idx_media_objects_parent_id;

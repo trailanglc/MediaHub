@@ -42,11 +42,11 @@ export function AppHeader() {
         >
           <MenuIcon className="size-4" />
         </SheetTrigger>
-        <SheetContent side="left" className="w-56 p-0">
+        <SheetContent side="left" className="flex h-full w-56 flex-col p-0">
           <SheetHeader className="sr-only">
             <SheetTitle>Menu</SheetTitle>
           </SheetHeader>
-          <AppSidebar className="h-full w-full border-0" />
+          <AppSidebar className="h-full min-h-0 w-full border-0" />
         </SheetContent>
       </Sheet>
 

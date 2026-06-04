@@ -1,41 +1,44 @@
 import type { Metadata } from "next";
 import { MarketingShell } from "@/components/marketing/marketing-shell";
+import {
+  getHomepageConfig,
+  homepageSiteName,
+} from "@/lib/marketing/homepage-config";
 
-const siteDescription =
-  "MediaHub — nền tảng quản lý media tự host: file manager phân quyền, upload S3/MinIO, streaming HLS và Integration API cho CMS.";
+export async function generateMetadata(): Promise<Metadata> {
+  const hp = await getHomepageConfig();
+  const siteName = homepageSiteName(hp);
 
-export const metadata: Metadata = {
-  title: {
-    default: "MediaHub — Self-hosted media & HLS streaming",
-    template: "%s | MediaHub",
-  },
-  description: siteDescription,
-  keywords: [
-    "media hub",
-    "self-hosted",
-    "HLS streaming",
-    "file manager",
-    "S3",
-    "MinIO",
-    "integration API",
-  ],
-  openGraph: {
-    type: "website",
-    locale: "vi_VN",
-    title: "MediaHub — Self-hosted media & HLS streaming",
-    description: siteDescription,
-    siteName: "MediaHub",
-  },
-  twitter: {
-    card: "summary_large_image",
-    title: "MediaHub",
-    description: siteDescription,
-  },
-  robots: {
-    index: true,
-    follow: true,
-  },
-};
+  return {
+    title: {
+      default: hp.meta_title,
+      template: `%s | ${siteName}`,
+    },
+    description: hp.meta_description,
+    keywords: hp.keywords,
+    openGraph: {
+      type: "website",
+      locale: "vi_VN",
+      title: hp.meta_title,
+      description: hp.meta_description,
+      siteName,
+      ...(hp.og_image_url
+        ? { images: [{ url: hp.og_image_url, alt: siteName }] }
+        : {}),
+    },
+    twitter: {
+      card: hp.og_image_url ? "summary_large_image" : "summary",
+      title: hp.meta_title,
+      description: hp.meta_description,
+      ...(hp.og_image_url ? { images: [hp.og_image_url] } : {}),
+    },
+    robots: {
+      index: true,
+      follow: true,
+    },
+    ...(hp.favicon_url ? { icons: { icon: hp.favicon_url } } : {}),
+  };
+}
 
 export default function MarketingLayout({
   children,

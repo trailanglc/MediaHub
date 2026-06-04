@@ -323,6 +323,26 @@ export type SettingsEditable = {
     name: string;
     public_url: string;
   };
+  homepage: {
+    meta_title: string;
+    meta_description: string;
+    keywords: string[];
+    favicon_object_id: string;
+    favicon_url: string;
+    og_image_object_id: string;
+    og_image_url: string;
+    hero_eyebrow: string;
+    hero_title: string;
+    hero_description: string;
+    hero_background_object_id: string;
+    hero_background_url: string;
+    features_title: string;
+    features_description: string;
+    cta_title: string;
+    cta_description: string;
+    schema_include_default: boolean;
+    schema_custom: unknown[];
+  };
   media: {
     default_root_folder_public_id: string;
     max_upload_bytes: number;
@@ -373,6 +393,7 @@ export type SettingsResponse = {
 
 export type SettingsPatch = {
   workspace?: Partial<SettingsEditable["workspace"]>;
+  homepage?: Partial<SettingsEditable["homepage"]>;
   media?: Partial<SettingsEditable["media"]>;
   security?: Partial<SettingsEditable["security"]>;
   streaming?: Partial<SettingsEditable["streaming"]>;

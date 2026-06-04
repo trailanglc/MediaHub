@@ -64,6 +64,7 @@ func NewRouter(deps RouterDeps) *gin.Engine {
 			setup.POST("/owner", deps.Setup.CreateOwner)
 		}
 
+		api.GET("/public/homepage", deps.Settings.PublicHomepage)
 		api.GET("/auth/crypto/public-key", deps.Password.PublicKey)
 
 		authPublic := api.Group("/auth")

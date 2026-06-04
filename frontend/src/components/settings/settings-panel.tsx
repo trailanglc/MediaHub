@@ -17,8 +17,16 @@ import {
   type SettingsPatch,
   type SettingsResponse,
 } from "@/lib/api-client";
+import { revalidateHomepageCache } from "@/lib/marketing/homepage-config";
 import { formatBytes } from "@/lib/format";
 import { UI_COPY } from "@/lib/ui-copy";
+import { DEFAULT_HOMEPAGE } from "@/lib/marketing/homepage-config";
+import { HomepageImageField } from "@/components/settings/homepage-image-field";
+import {
+  parseSchemaCustomText,
+  SCHEMA_EXAMPLE,
+  schemaCustomToText,
+} from "@/lib/marketing/homepage-schema";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -39,6 +47,7 @@ import { Textarea } from "@/components/ui/textarea";
 
 const TABS = [
   "general",
+  "homepage",
   "media",
   "streaming",
   "storage",
@@ -75,6 +84,8 @@ function gbInputToBytes(gb: string) {
 
 type FormState = SettingsEditable & {
   domainsText: string;
+  keywordsText: string;
+  schemaCustomText: string;
   maxUploadGb: string;
   quotaGb: string;
 };
@@ -83,7 +94,10 @@ function toFormState(data: SettingsResponse): FormState {
   const e = data.editable;
   return {
     ...e,
+    homepage: e.homepage ?? DEFAULT_HOMEPAGE,
     domainsText: domainsToText(e.streaming.global_allowed_domains),
+    keywordsText: domainsToText(e.homepage?.keywords ?? []),
+    schemaCustomText: schemaCustomToText(e.homepage?.schema_custom),
     maxUploadGb: bytesToGbInput(e.media.max_upload_bytes),
     quotaGb:
       e.storage.quota_bytes > 0 ? bytesToGbInput(e.storage.quota_bytes) : "",
@@ -129,10 +143,16 @@ export function SettingsPanel() {
 
   const saveMutation = useMutation({
     mutationFn: (patch: SettingsPatch) => updateSettings(patch),
-    onSuccess: (resp) => {
+    onSuccess: async (resp, patch) => {
       queryClient.setQueryData(SETTINGS_QUERY_KEY, resp);
       void queryClient.invalidateQueries({ queryKey: UPLOAD_LIMITS_QUERY_KEY });
       setDraft(null);
+      if (patch.homepage) {
+        const ok = await revalidateHomepageCache();
+        if (!ok) {
+          toast.warning("Đã lưu — cache trang chủ sẽ cập nhật sau vài phút");
+        }
+      }
       toast.success(UI_COPY.saveSuccess);
     },
     onError: (err) => {
@@ -167,6 +187,35 @@ export function SettingsPanel() {
       },
       media: {
         default_root_folder_public_id: form.media.default_root_folder_public_id,
+      },
+    });
+  };
+
+  const saveHomepage = () => {
+    let schemaCustom: unknown[];
+    try {
+      schemaCustom = parseSchemaCustomText(form.schemaCustomText);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Schema JSON-LD không hợp lệ");
+      return;
+    }
+    saveMutation.mutate({
+      homepage: {
+        meta_title: form.homepage.meta_title,
+        meta_description: form.homepage.meta_description,
+        keywords: textToDomains(form.keywordsText),
+        favicon_object_id: form.homepage.favicon_object_id,
+        og_image_object_id: form.homepage.og_image_object_id,
+        hero_eyebrow: form.homepage.hero_eyebrow,
+        hero_title: form.homepage.hero_title,
+        hero_description: form.homepage.hero_description,
+        hero_background_object_id: form.homepage.hero_background_object_id,
+        features_title: form.homepage.features_title,
+        features_description: form.homepage.features_description,
+        cta_title: form.homepage.cta_title,
+        cta_description: form.homepage.cta_description,
+        schema_include_default: form.homepage.schema_include_default,
+        schema_custom: schemaCustom,
       },
     });
   };
@@ -237,6 +286,7 @@ export function SettingsPanel() {
           className="col-start-1 row-start-1 h-auto w-full shrink-0 md:w-full"
         >
           <TabsTrigger value="general">Chung</TabsTrigger>
+          <TabsTrigger value="homepage">Trang chủ</TabsTrigger>
           <TabsTrigger value="media">Media</TabsTrigger>
           <TabsTrigger value="streaming">Streaming</TabsTrigger>
           <TabsTrigger value="storage">Storage</TabsTrigger>
@@ -292,6 +342,267 @@ export function SettingsPanel() {
                 />
               </FormField>
               <SettingsSaveButton pending={savePending} onClick={saveGeneral} />
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="homepage" className="mt-0 space-y-4">
+          <Card size="sm">
+            <CardHeader>
+              <CardTitle>SEO &amp; metadata</CardTitle>
+              <CardDescription>
+                Title, mô tả và hình ảnh dùng cho Google, Open Graph và Twitter Card.
+                Upload trực tiếp — file lưu vào File Manager (root folder tab Chung).
+                Thay đổi có hiệu lực ngay sau khi lưu (cache tự xóa).
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <FormField label="Meta title">
+                <Input
+                  value={form.homepage.meta_title}
+                  onChange={(e) =>
+                    setDraft({
+                      ...form,
+                      homepage: { ...form.homepage, meta_title: e.target.value },
+                    })
+                  }
+                />
+              </FormField>
+              <FormField label="Meta description">
+                <Textarea
+                  rows={3}
+                  value={form.homepage.meta_description}
+                  onChange={(e) =>
+                    setDraft({
+                      ...form,
+                      homepage: {
+                        ...form.homepage,
+                        meta_description: e.target.value,
+                      },
+                    })
+                  }
+                />
+              </FormField>
+              <FormField
+                label="Keywords"
+                hint="Mỗi dòng hoặc cách nhau bằng dấu phẩy"
+              >
+                <Textarea
+                  rows={3}
+                  value={form.keywordsText}
+                  onChange={(e) =>
+                    setDraft({ ...form, keywordsText: e.target.value })
+                  }
+                />
+              </FormField>
+              <HomepageImageField
+                label="Favicon"
+                hint="PNG, ICO hoặc SVG — khuyến nghị 32×32 hoặc 48×48"
+                aspect="square"
+                objectId={form.homepage.favicon_object_id}
+                uploadParentId={form.media.default_root_folder_public_id}
+                accept="image/png,image/jpeg,image/webp,image/svg+xml,image/x-icon,.ico"
+                onObjectIdChange={(favicon_object_id) =>
+                  setDraft({
+                    ...form,
+                    homepage: { ...form.homepage, favicon_object_id },
+                  })
+                }
+              />
+              <HomepageImageField
+                label="OG image"
+                hint="Ảnh chia sẻ mạng xã hội — khuyến nghị 1200×630"
+                aspect="video"
+                objectId={form.homepage.og_image_object_id}
+                uploadParentId={form.media.default_root_folder_public_id}
+                onObjectIdChange={(og_image_object_id) =>
+                  setDraft({
+                    ...form,
+                    homepage: { ...form.homepage, og_image_object_id },
+                  })
+                }
+              />
+            </CardContent>
+          </Card>
+
+          <Card size="sm">
+            <CardHeader>
+              <CardTitle>Schema.org (JSON-LD)</CardTitle>
+              <CardDescription>
+                Structured data cho Google Rich Results. Có thể dùng schema mặc định{" "}
+                <code className="rounded bg-muted px-1 py-0.5 text-xs">SoftwareApplication</code>{" "}
+                và thêm các object JSON-LD tùy chỉnh (Organization, WebSite, FAQ…).
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <FormField
+                label="Schema mặc định"
+                hint="Tự sinh từ meta title & description"
+              >
+                <label className="flex cursor-pointer items-center gap-2 text-sm">
+                  <Checkbox
+                    checked={form.homepage.schema_include_default}
+                    onChange={(e) =>
+                      setDraft({
+                        ...form,
+                        homepage: {
+                          ...form.homepage,
+                          schema_include_default: e.target.checked,
+                        },
+                      })
+                    }
+                  />
+                  Bật SoftwareApplication (schema.org)
+                </label>
+              </FormField>
+              <FormField
+                label="Schema custom (JSON-LD)"
+                hint="Mảng JSON hoặc một object — tối đa 10 schema, 16 KB. Ví dụ Organization bên dưới."
+              >
+                <Textarea
+                  rows={12}
+                  className="font-mono text-xs"
+                  placeholder={SCHEMA_EXAMPLE}
+                  value={form.schemaCustomText}
+                  onChange={(e) =>
+                    setDraft({ ...form, schemaCustomText: e.target.value })
+                  }
+                />
+              </FormField>
+            </CardContent>
+          </Card>
+
+          <Card size="sm">
+            <CardHeader>
+              <CardTitle>Hero (phần đầu trang)</CardTitle>
+              <CardDescription>Nội dung chính hiển thị khi vào trang chủ /.</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <FormField label="Eyebrow (dòng phụ)">
+                <Input
+                  value={form.homepage.hero_eyebrow}
+                  onChange={(e) =>
+                    setDraft({
+                      ...form,
+                      homepage: { ...form.homepage, hero_eyebrow: e.target.value },
+                    })
+                  }
+                />
+              </FormField>
+              <FormField label="Tiêu đề chính (H1)">
+                <Input
+                  value={form.homepage.hero_title}
+                  onChange={(e) =>
+                    setDraft({
+                      ...form,
+                      homepage: { ...form.homepage, hero_title: e.target.value },
+                    })
+                  }
+                />
+              </FormField>
+              <FormField label="Giới thiệu">
+                <Textarea
+                  rows={4}
+                  value={form.homepage.hero_description}
+                  onChange={(e) =>
+                    setDraft({
+                      ...form,
+                      homepage: {
+                        ...form.homepage,
+                        hero_description: e.target.value,
+                      },
+                    })
+                  }
+                />
+              </FormField>
+              <HomepageImageField
+                label="Ảnh nền hero"
+                hint="Để trống dùng gradient mặc định"
+                aspect="wide"
+                objectId={form.homepage.hero_background_object_id}
+                uploadParentId={form.media.default_root_folder_public_id}
+                onObjectIdChange={(hero_background_object_id) =>
+                  setDraft({
+                    ...form,
+                    homepage: { ...form.homepage, hero_background_object_id },
+                  })
+                }
+              />
+            </CardContent>
+          </Card>
+
+          <Card size="sm">
+            <CardHeader>
+              <CardTitle>Nội dung các section</CardTitle>
+              <CardDescription>Tiêu đề và mô tả vùng tính năng &amp; CTA cuối trang.</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <FormField label="Tiêu đề section tính năng">
+                <Input
+                  value={form.homepage.features_title}
+                  onChange={(e) =>
+                    setDraft({
+                      ...form,
+                      homepage: {
+                        ...form.homepage,
+                        features_title: e.target.value,
+                      },
+                    })
+                  }
+                />
+              </FormField>
+              <FormField label="Mô tả section tính năng">
+                <Textarea
+                  rows={2}
+                  value={form.homepage.features_description}
+                  onChange={(e) =>
+                    setDraft({
+                      ...form,
+                      homepage: {
+                        ...form.homepage,
+                        features_description: e.target.value,
+                      },
+                    })
+                  }
+                />
+              </FormField>
+              <FormField label="Tiêu đề CTA">
+                <Input
+                  value={form.homepage.cta_title}
+                  onChange={(e) =>
+                    setDraft({
+                      ...form,
+                      homepage: { ...form.homepage, cta_title: e.target.value },
+                    })
+                  }
+                />
+              </FormField>
+              <FormField label="Mô tả CTA">
+                <Textarea
+                  rows={2}
+                  value={form.homepage.cta_description}
+                  onChange={(e) =>
+                    setDraft({
+                      ...form,
+                      homepage: {
+                        ...form.homepage,
+                        cta_description: e.target.value,
+                      },
+                    })
+                  }
+                />
+              </FormField>
+              <div className="flex flex-wrap items-center gap-3">
+                <SettingsSaveButton pending={savePending} onClick={saveHomepage} />
+                <Button
+                  type="button"
+                  variant="outline"
+                  nativeButton={false}
+                  render={<Link href="/" target="_blank" rel="noopener noreferrer" />}
+                >
+                  Xem trang chủ
+                </Button>
+              </div>
             </CardContent>
           </Card>
         </TabsContent>

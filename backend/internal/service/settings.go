@@ -59,6 +59,13 @@ func (s *SettingsService) invalidateCache(ctx context.Context) {
 	rediscache.InvalidateAllStreamVideos(ctx, s.cache)
 }
 
+func (s *SettingsService) invalidateHomepagePublicCache(ctx context.Context) {
+	if s.cache == nil || !s.cache.Enabled() {
+		return
+	}
+	_ = s.cache.Delete(ctx, rediscache.KeyHomepagePublicV1)
+}
+
 // GlobalAllowedDomains returns streaming global allowlist (uses settings cache).
 func (s *SettingsService) GlobalAllowedDomains(ctx context.Context) ([]string, error) {
 	resp, err := s.Get(ctx)
@@ -100,6 +107,7 @@ type SettingsMaintenance struct {
 
 type SettingsEditable struct {
 	Workspace   SettingsWorkspace   `json:"workspace"`
+	Homepage    SettingsHomepage    `json:"homepage"`
 	Media       SettingsMedia       `json:"media"`
 	Security    SettingsSecurity    `json:"security"`
 	Streaming   SettingsStreaming   `json:"streaming"`
@@ -139,6 +147,7 @@ type SettingsResponse struct {
 
 type SettingsPatch struct {
 	Workspace   *SettingsWorkspacePatch   `json:"workspace,omitempty"`
+	Homepage    *SettingsHomepagePatch    `json:"homepage,omitempty"`
 	Media       *SettingsMediaPatch       `json:"media,omitempty"`
 	Security    *SettingsSecurityPatch    `json:"security,omitempty"`
 	Streaming   *SettingsStreamingPatch   `json:"streaming,omitempty"`
@@ -207,8 +216,30 @@ func (s *SettingsService) loadSettings(ctx context.Context) (*SettingsResponse, 
 	}, nil
 }
 
+func (s *SettingsService) PublicHomepageCached(ctx context.Context) (SettingsHomepage, error) {
+	if s.cache == nil || !s.cache.Enabled() {
+		return s.HomepageConfig(ctx)
+	}
+	var hp SettingsHomepage
+	_, err := s.cache.GetOrLoadJSON(ctx, rediscache.KeyHomepagePublicV1, rediscache.TTLHomepagePublic, &hp, func(ctx context.Context) (any, error) {
+		return s.HomepageConfig(ctx)
+	})
+	if err != nil {
+		return DefaultHomepageSettings(), err
+	}
+	return hp, nil
+}
+
+func (s *SettingsService) HomepageConfig(ctx context.Context) (SettingsHomepage, error) {
+	resp, err := s.Get(ctx)
+	if err != nil || resp == nil {
+		return DefaultHomepageSettings(), err
+	}
+	return resp.Editable.Homepage, nil
+}
+
 func (s *SettingsService) Update(ctx context.Context, patch SettingsPatch, actorID int64, ip, userAgent string) (*SettingsResponse, error) {
-	upserts, err := s.patchToUpserts(patch)
+	upserts, err := s.patchToUpserts(ctx, patch)
 	if err != nil {
 		return nil, err
 	}
@@ -224,6 +255,9 @@ func (s *SettingsService) Update(ctx context.Context, patch SettingsPatch, actor
 	}
 	_ = s.audit.Log(ctx, &actorID, "settings.update", "system_settings", nil, ip, userAgent, meta)
 	s.invalidateCache(ctx)
+	if patch.Homepage != nil {
+		s.invalidateHomepagePublicCache(ctx)
+	}
 	return s.Get(ctx)
 }
 
@@ -238,6 +272,7 @@ func (s *SettingsService) buildEditable(raw map[string]json.RawMessage) Settings
 			Name:      stringVal(raw, KeyWorkspaceName, "MediaHub"),
 			PublicURL: stringVal(raw, KeyWorkspacePublicURL, s.cfg.AppURL),
 		},
+		Homepage: homepageFromRaw(raw),
 		Media: SettingsMedia{
 			DefaultRootFolderPublicID: stringVal(raw, KeyMediaDefaultRootFolderPublicID, repository.DefaultRootFolderPublicID),
 			MaxUploadBytes:            int64Val(raw, KeyMediaMaxUploadBytes, DefaultMaxUploadBytes),
@@ -284,7 +319,7 @@ func (s *SettingsService) buildReadonly() SettingsReadonly {
 	}
 }
 
-func (s *SettingsService) patchToUpserts(patch SettingsPatch) ([]repository.SettingUpsert, error) {
+func (s *SettingsService) patchToUpserts(ctx context.Context, patch SettingsPatch) ([]repository.SettingUpsert, error) {
 	var upserts []repository.SettingUpsert
 
 	if patch.Workspace != nil {
@@ -302,6 +337,18 @@ func (s *SettingsService) patchToUpserts(patch SettingsPatch) ([]repository.Sett
 			}
 			upserts = append(upserts, repository.SettingUpsert{Key: KeyWorkspacePublicURL, Value: u})
 		}
+	}
+
+	if patch.Homepage != nil {
+		raw, err := s.repo.GetAll(ctx)
+		if err != nil {
+			return nil, err
+		}
+		merged := mergeHomepagePatch(homepageFromRaw(raw), *patch.Homepage)
+		if err := merged.validate(); err != nil {
+			return nil, err
+		}
+		upserts = append(upserts, repository.SettingUpsert{Key: KeyHomepageConfig, Value: merged})
 	}
 
 	if patch.Media != nil {

@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -28,7 +29,7 @@ func TestSettingsService_patchToUpserts_validation(t *testing.T) {
 	s := &SettingsService{cfg: testConfig()}
 
 	empty := ""
-	_, err := s.patchToUpserts(SettingsPatch{
+	_, err := s.patchToUpserts(context.Background(), SettingsPatch{
 		Workspace: &SettingsWorkspacePatch{Name: &empty},
 	})
 	if err == nil {
@@ -36,7 +37,7 @@ func TestSettingsService_patchToUpserts_validation(t *testing.T) {
 	}
 
 	badURL := "not-a-url"
-	_, err = s.patchToUpserts(SettingsPatch{
+	_, err = s.patchToUpserts(context.Background(), SettingsPatch{
 		Workspace: &SettingsWorkspacePatch{PublicURL: &badURL},
 	})
 	if err == nil {
@@ -44,21 +45,21 @@ func TestSettingsService_patchToUpserts_validation(t *testing.T) {
 	}
 
 	zero := int64(0)
-	_, err = s.patchToUpserts(SettingsPatch{
+	_, err = s.patchToUpserts(context.Background(), SettingsPatch{
 		Media: &SettingsMediaPatch{MaxUploadBytes: &zero},
 	})
 	if err == nil {
 		t.Fatal("expected error for zero max upload")
 	}
 
-	upserts, err := s.patchToUpserts(SettingsPatch{})
+	upserts, err := s.patchToUpserts(context.Background(), SettingsPatch{})
 	if err != nil || len(upserts) != 0 {
 		t.Fatalf("expected empty upserts, got %v err=%v", upserts, err)
 	}
 
 	name := "My Hub"
 	attempts := 10
-	upserts, err = s.patchToUpserts(SettingsPatch{
+	upserts, err = s.patchToUpserts(context.Background(), SettingsPatch{
 		Workspace: &SettingsWorkspacePatch{Name: &name},
 		Security:  &SettingsSecurityPatch{LoginMaxAttempts: &attempts},
 	})

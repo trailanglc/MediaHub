@@ -126,7 +126,7 @@ func newSecurityEnv(t *testing.T) *securityEnv {
 		Auth:     handler.NewAuthHandler(authSvc, passwordTransport),
 		Member:   handler.NewMemberHandler(memberSvc, passwordTransport),
 		Perm:     handler.NewPermissionHandler(permSvc),
-		Settings: handler.NewSettingsHandler(settingsSvc, logger),
+		Settings: handler.NewSettingsHandler(settingsSvc, nil, logger),
 		Password: passwordTransport,
 		AuthMW:   authMW,
 		AppURL:   cfg.AppURL,

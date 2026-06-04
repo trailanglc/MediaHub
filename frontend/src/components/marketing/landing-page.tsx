@@ -8,6 +8,7 @@ import {
   UploadIcon,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import type { HomepageConfig } from "@/lib/marketing/homepage-config";
 
 const FEATURES = [
   {
@@ -48,7 +49,13 @@ const FEATURES = [
   },
 ] as const;
 
-export function LandingPage({ setupRequired }: { setupRequired: boolean }) {
+export function LandingPage({
+  config,
+  setupRequired,
+}: {
+  config: HomepageConfig;
+  setupRequired: boolean;
+}) {
   return (
     <>
       {setupRequired && (
@@ -63,23 +70,35 @@ export function LandingPage({ setupRequired }: { setupRequired: boolean }) {
         </div>
       )}
 
-      <section className="relative overflow-hidden border-b border-border/60">
-        <div
-          className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_80%_60%_at_50%_-20%,oklch(0.75_0.12_250/0.18),transparent)]"
-          aria-hidden
-        />
+      <section
+        className="relative overflow-hidden border-b border-border/60"
+        style={
+          config.hero_background_url
+            ? {
+                backgroundImage: `linear-gradient(to bottom, oklch(0 0 0 / 0.45), oklch(0 0 0 / 0.65)), url(${config.hero_background_url})`,
+                backgroundSize: "cover",
+                backgroundPosition: "center",
+              }
+            : undefined
+        }
+      >
+        {!config.hero_background_url && (
+          <div
+            className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_80%_60%_at_50%_-20%,oklch(0.75_0.12_250/0.18),transparent)]"
+            aria-hidden
+          />
+        )}
         <div className="relative mx-auto max-w-6xl px-4 py-20 sm:px-6 sm:py-28 lg:py-32">
-          <p className="mb-4 text-sm font-medium uppercase tracking-widest text-primary/80">
-            Self-hosted media platform
-          </p>
+          {config.hero_eyebrow ? (
+            <p className="mb-4 text-sm font-medium uppercase tracking-widest text-primary/80">
+              {config.hero_eyebrow}
+            </p>
+          ) : null}
           <h1 className="max-w-3xl text-4xl font-bold tracking-tight sm:text-5xl lg:text-6xl">
-            Quản lý media &amp; streaming{" "}
-            <span className="text-muted-foreground">trên hạ tầng của bạn</span>
+            {config.hero_title}
           </h1>
           <p className="mt-6 max-w-2xl text-lg leading-relaxed text-muted-foreground">
-            MediaHub gom file manager, chuyển mã HLS và API tích hợp cho CMS —
-            monorepo Go + Next.js, sẵn sàng triển khai nội bộ hoặc cho khách hàng
-            self-host.
+            {config.hero_description}
           </p>
           <div className="mt-10 flex flex-wrap gap-3">
             <Button
@@ -108,11 +127,9 @@ export function LandingPage({ setupRequired }: { setupRequired: boolean }) {
       >
         <div className="mb-12 max-w-2xl">
           <h2 id="features-heading" className="text-2xl font-bold tracking-tight sm:text-3xl">
-            Tính năng chính
+            {config.features_title}
           </h2>
-          <p className="mt-3 text-muted-foreground">
-            Một dashboard cho team vận hành, một API cho website tích hợp.
-          </p>
+          <p className="mt-3 text-muted-foreground">{config.features_description}</p>
         </div>
         <ul className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
           {FEATURES.map(({ icon: Icon, title, description }) => (
@@ -135,12 +152,9 @@ export function LandingPage({ setupRequired }: { setupRequired: boolean }) {
       <section className="border-t border-border/60 bg-muted/20">
         <div className="mx-auto max-w-6xl px-4 py-16 sm:px-6 sm:py-20">
           <div className="rounded-2xl border border-border bg-card px-6 py-10 text-center shadow-sm sm:px-12">
-            <h2 className="text-xl font-bold sm:text-2xl">
-              Tích hợp CMS trong vài phút
-            </h2>
+            <h2 className="text-xl font-bold sm:text-2xl">{config.cta_title}</h2>
             <p className="mx-auto mt-3 max-w-xl text-sm text-muted-foreground sm:text-base">
-              Tạo API key, gọi <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-xs">/api/v1</code>{" "}
-              để upload, lấy delivery URL và embed video HLS.
+              {config.cta_description}
             </p>
             <Button
               nativeButton={false}

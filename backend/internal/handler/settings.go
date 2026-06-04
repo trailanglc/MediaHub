@@ -13,11 +13,24 @@ import (
 
 type SettingsHandler struct {
 	settings *service.SettingsService
+	homepage *service.HomepageAssetResolver
 	logger   *zap.Logger
 }
 
-func NewSettingsHandler(settings *service.SettingsService, logger *zap.Logger) *SettingsHandler {
-	return &SettingsHandler{settings: settings, logger: logger}
+func NewSettingsHandler(settings *service.SettingsService, homepage *service.HomepageAssetResolver, logger *zap.Logger) *SettingsHandler {
+	return &SettingsHandler{settings: settings, homepage: homepage, logger: logger}
+}
+
+func (h *SettingsHandler) PublicHomepage(c *gin.Context) {
+	hp, err := h.settings.PublicHomepageCached(c.Request.Context())
+	if err != nil {
+		hp = service.DefaultHomepageSettings()
+	}
+	if h.homepage != nil {
+		hp = h.homepage.Resolve(c.Request.Context(), hp)
+	}
+	c.Header("Cache-Control", "public, max-age=86400, stale-while-revalidate=604800")
+	c.JSON(http.StatusOK, hp)
 }
 
 func (h *SettingsHandler) Get(c *gin.Context) {
@@ -31,6 +44,9 @@ func (h *SettingsHandler) Get(c *gin.Context) {
 			"message": "failed to load settings",
 		})
 		return
+	}
+	if h.homepage != nil {
+		resp.Editable.Homepage = h.homepage.Resolve(c.Request.Context(), resp.Editable.Homepage)
 	}
 	c.JSON(http.StatusOK, resp)
 }
@@ -68,6 +84,9 @@ func (h *SettingsHandler) Update(c *gin.Context) {
 		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal_error", "message": "failed to update settings"})
 		return
+	}
+	if h.homepage != nil {
+		resp.Editable.Homepage = h.homepage.Resolve(c.Request.Context(), resp.Editable.Homepage)
 	}
 	c.JSON(http.StatusOK, resp)
 }

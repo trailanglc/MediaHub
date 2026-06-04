@@ -1,38 +1,46 @@
 import type { Metadata } from "next";
 import { LandingPage } from "@/components/marketing/landing-page";
+import {
+  getHomepageConfig,
+  homepageSiteName,
+} from "@/lib/marketing/homepage-config";
+import {
+  buildHomepageJsonLd,
+  homepageJsonLdScriptContent,
+} from "@/lib/marketing/homepage-schema";
 import { fetchSetupStatusServer } from "@/lib/api/setup-server";
 
-export const metadata: Metadata = {
-  alternates: { canonical: "/" },
-};
+export async function generateMetadata(): Promise<Metadata> {
+  const hp = await getHomepageConfig();
+  return {
+    alternates: { canonical: "/" },
+    title: hp.meta_title,
+    description: hp.meta_description,
+  };
+}
 
 export default async function HomePage() {
-  let setupRequired = false;
-  try {
-    const status = await fetchSetupStatusServer();
-    setupRequired = status.setup_required;
-  } catch {
-    // API offline — still show landing
-  }
+  const [hp, setupRequired] = await Promise.all([
+    getHomepageConfig(),
+    fetchSetupStatusServer()
+      .then((s) => s.setup_required)
+      .catch(() => false),
+  ]);
 
-  const jsonLd = {
-    "@context": "https://schema.org",
-    "@type": "SoftwareApplication",
-    name: "MediaHub",
-    applicationCategory: "MultimediaApplication",
-    operatingSystem: "Self-hosted",
-    description:
-      "Self-hosted media asset manager with HLS streaming and Integration API.",
-    offers: { "@type": "Offer", price: "0", priceCurrency: "USD" },
-  };
+  const siteName = homepageSiteName(hp);
+  const jsonLdBlocks = buildHomepageJsonLd(hp, siteName);
 
   return (
     <>
-      <script
-        type="application/ld+json"
-        dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}
-      />
-      <LandingPage setupRequired={setupRequired} />
+      {jsonLdBlocks.length > 0 ? (
+        <script
+          type="application/ld+json"
+          dangerouslySetInnerHTML={{
+            __html: homepageJsonLdScriptContent(jsonLdBlocks),
+          }}
+        />
+      ) : null}
+      <LandingPage config={hp} setupRequired={setupRequired} />
     </>
   );
 }

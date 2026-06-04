@@ -194,6 +194,8 @@ func main() {
 		}
 	}
 
+	homepageAssets := service.NewHomepageAssetResolver(mediaRepo, deliverySvc)
+
 	router := handler.NewRouter(handler.RouterDeps{
 		Logger:     logger,
 		Health:     health,
@@ -204,7 +206,7 @@ func main() {
 		Auth:     handler.NewAuthHandler(authSvc, passwordTransport),
 		Member:   handler.NewMemberHandler(memberSvc, passwordTransport),
 		Perm:     handler.NewPermissionHandler(permSvc),
-		Settings: handler.NewSettingsHandler(settingsSvc, logger),
+		Settings: handler.NewSettingsHandler(settingsSvc, homepageAssets, logger),
 		Objects:  handler.NewObjectHandler(mediaSvc),
 		Upload:   handler.NewUploadHandler(uploadSvc, logger),
 		Videos:   handler.NewVideoHandler(videoSvc, s3Store),

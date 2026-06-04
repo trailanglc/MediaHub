@@ -2,6 +2,7 @@ package handler
 
 import (
 	"github.com/anhtuanlc/mediahub/internal/middleware"
+	"github.com/anhtuanlc/mediahub/internal/observability"
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 )
@@ -9,18 +10,24 @@ import (
 type RouterDeps struct {
 	Logger      *zap.Logger
 	Health      *HealthHandler
+	SystemInfo  *SystemInfoHandler
 	System      *SystemHandler
+	Queue       *QueueHandler
 	Setup       *SetupHandler
-	Auth     *AuthHandler
-	Member   *MemberHandler
-	Perm     *PermissionHandler
-	Settings *SettingsHandler
-	Objects  *ObjectHandler
-	Upload   *UploadHandler
-	Password *PasswordTransport
-	AuthMW   *middleware.AuthMiddleware
-	AppURL   string
-	AppEnv   string
+	Auth        *AuthHandler
+	Member      *MemberHandler
+	Perm        *PermissionHandler
+	Settings    *SettingsHandler
+	Objects     *ObjectHandler
+	Upload      *UploadHandler
+	Videos      *VideoHandler
+	APIKeys     *APIKeyHandler
+	Stream      *StreamHandler
+	Password    *PasswordTransport
+	AuthMW      *middleware.AuthMiddleware
+	AppURL          string
+	AppEnv          string
+	TrustedProxies  []string
 }
 
 func NewRouter(deps RouterDeps) *gin.Engine {
@@ -29,12 +36,17 @@ func NewRouter(deps RouterDeps) *gin.Engine {
 	}
 
 	r := gin.New()
+	if err := r.SetTrustedProxies(deps.TrustedProxies); err != nil {
+		panic("trusted proxies: " + err.Error())
+	}
 	r.Use(gin.Recovery())
 	r.Use(middleware.RequestID())
 	r.Use(middleware.Logger(deps.Logger))
 	r.Use(middleware.CORS(deps.AppURL))
+	r.Use(observability.HTTPMetricsMiddleware())
 
 	r.GET("/health", deps.Health.Liveness)
+	r.GET("/metrics", observability.PrometheusHandler())
 
 	api := r.Group("/api")
 	{
@@ -80,12 +92,30 @@ func NewRouter(deps RouterDeps) *gin.Engine {
 				system := owner.Group("/system")
 				{
 					system.GET("/health", deps.Health.SystemHealth)
-					system.GET("/storage", NotImplemented)
-					system.GET("/queue", NotImplemented)
-					system.GET("/security", NotImplemented)
-					system.GET("/stream-analytics", NotImplemented)
+					system.GET("/health/:component", deps.Health.ComponentHealth)
+					if deps.SystemInfo != nil {
+						system.GET("/storage", deps.SystemInfo.Storage)
+						system.GET("/security", deps.SystemInfo.Security)
+					} else {
+						system.GET("/storage", NotImplemented)
+						system.GET("/security", NotImplemented)
+					}
+					if deps.Queue != nil {
+						system.GET("/queue", deps.Queue.QueueStatus)
+						system.GET("/stream-analytics", deps.Queue.StreamAnalytics)
+					} else {
+						system.GET("/queue", NotImplemented)
+						system.GET("/stream-analytics", NotImplemented)
+					}
 					system.POST("/cleanup/temp", deps.System.CleanupTemp)
 					system.POST("/cleanup/orphans", deps.System.CleanupOrphans)
+				}
+
+				if deps.APIKeys != nil {
+					owner.GET("/api-keys", deps.APIKeys.List)
+					owner.POST("/api-keys", deps.APIKeys.Create)
+					owner.PATCH("/api-keys/:public_id", deps.APIKeys.Patch)
+					owner.DELETE("/api-keys/:public_id", deps.APIKeys.Delete)
 				}
 			}
 
@@ -108,22 +138,23 @@ func NewRouter(deps RouterDeps) *gin.Engine {
 			protected.POST("/upload/:session_id/complete", deps.Upload.Complete)
 			protected.DELETE("/upload/:session_id", deps.Upload.Abort)
 
-			protected.GET("/videos", NotImplemented)
-			protected.GET("/videos/:public_id", NotImplemented)
-			protected.POST("/videos/:public_id/convert", NotImplemented)
-			protected.GET("/videos/:public_id/hls", NotImplemented)
-			protected.DELETE("/videos/:public_id/hls", NotImplemented)
-
-			protected.GET("/api-keys", NotImplemented)
-			protected.POST("/api-keys", NotImplemented)
-			protected.PATCH("/api-keys/:public_id", NotImplemented)
-			protected.DELETE("/api-keys/:public_id", NotImplemented)
+			if deps.Videos != nil {
+				protected.GET("/videos", deps.Videos.List)
+				protected.GET("/videos/:public_id", deps.Videos.Get)
+				protected.POST("/videos/:public_id/convert", deps.Videos.Convert)
+				protected.GET("/videos/:public_id/hls", deps.Videos.GetHLS)
+				protected.DELETE("/videos/:public_id/hls", deps.Videos.DeleteHLS)
+				protected.GET("/videos/:public_id/stream-policy", deps.Videos.GetStreamPolicy)
+				protected.PATCH("/videos/:public_id/stream-policy", deps.Videos.PatchStreamPolicy)
+			}
 		}
 	}
 
-	stream := r.Group("/stream")
-	{
-		stream.GET("/:video_public_id/*filepath", StreamForbidden)
+	if deps.Stream != nil {
+		stream := r.Group("/stream")
+		{
+			stream.GET("/:video_public_id/*filepath", deps.Stream.Serve)
+		}
 	}
 
 	return r

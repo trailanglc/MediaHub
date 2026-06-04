@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/anhtuanlc/mediahub/internal/mediautil"
-	"github.com/anhtuanlc/mediahub/internal/platform"
+	"github.com/anhtuanlc/mediahub/internal/platform/upload"
 	"github.com/anhtuanlc/mediahub/internal/repository"
 	"github.com/anhtuanlc/mediahub/internal/storage"
 	"github.com/google/uuid"
@@ -35,7 +35,7 @@ type UploadService struct {
 	pool          *pgxpool.Pool
 	store         storage.ObjectStorage
 	thumbnails    *ThumbnailService
-	uploadLimiter *platform.UploadRateLimiter
+	uploadLimiter *upload.RateLimiter
 	maxPending    int
 }
 
@@ -45,7 +45,7 @@ func NewUploadService(
 	pool *pgxpool.Pool,
 	store storage.ObjectStorage,
 	thumbnails *ThumbnailService,
-	uploadLimiter *platform.UploadRateLimiter,
+	uploadLimiter *upload.RateLimiter,
 	maxPending int,
 ) *UploadService {
 	return &UploadService{
@@ -99,14 +99,8 @@ func (s *UploadService) Init(ctx context.Context, userID int64, role string, in 
 			return nil, ErrUploadRateLimited
 		}
 	}
-	if s.maxPending > 0 {
-		n, err := s.sessions.CountPendingByUser(ctx, userID)
-		if err != nil {
-			return nil, err
-		}
-		if n >= s.maxPending {
-			return nil, ErrUploadTooManyPending
-		}
+	if err := s.reconcilePendingSessions(ctx, userID); err != nil {
+		return nil, err
 	}
 	if in.Size <= 0 {
 		return nil, fmt.Errorf("%w: size required", ErrUploadInvalidChunk)
@@ -171,7 +165,7 @@ func (s *UploadService) Init(ctx context.Context, userID int64, role string, in 
 		return nil, err
 	}
 
-	platform.Upload.InitTotal.Add(1)
+	upload.Default.InitTotal.Add(1)
 	return &InitUploadResult{
 		SessionPublicID: sess.PublicID.String(),
 		ChunkSize:       chunkSize,
@@ -222,7 +216,7 @@ func (s *UploadService) PutChunk(ctx context.Context, userID int64, sessionPubli
 		return err
 	}
 
-	platform.Upload.ChunkTotal.Add(1)
+	upload.Default.ChunkTotal.Add(1)
 	return s.sessions.AppendPart(ctx, sess.ID, repository.UploadPartRecord{
 		PartNumber: partNumber,
 		ETag:       etag,
@@ -281,12 +275,14 @@ func (s *UploadService) Complete(ctx context.Context, userID int64, role string,
 	tid := m.ID
 	_ = s.media.Audit().Log(ctx, &userID, "upload", m.Type, &tid, ip, ua, map[string]string{"name": sess.OriginalName})
 
-	platform.Upload.CompleteTotal.Add(1)
+	upload.Default.CompleteTotal.Add(1)
 	if m.Type == "image" && s.thumbnails != nil && m.StorageKey != nil {
 		pid := m.PublicID
 		srcKey := *m.StorageKey
 		go func() {
-			_ = s.thumbnails.GenerateForObject(context.Background(), pid, srcKey)
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+			defer cancel()
+			_ = s.thumbnails.GenerateForObject(ctx, pid, srcKey)
 		}()
 	}
 
@@ -325,6 +321,44 @@ func mergeUploadParts(records []repository.UploadPartRecord, expected int) ([]st
 		return out[i].PartNumber < out[j].PartNumber
 	})
 	return out, nil
+}
+
+// reconcilePendingSessions expires stale sessions and aborts oldest excess pending
+// so a new upload can start (orphaned inits from failed/cancelled uploads).
+func (s *UploadService) reconcilePendingSessions(ctx context.Context, userID int64) error {
+	if _, err := s.ExpireStaleSessions(ctx); err != nil {
+		return err
+	}
+	if s.maxPending <= 0 {
+		return nil
+	}
+	n, err := s.sessions.CountPendingByUser(ctx, userID)
+	if err != nil {
+		return err
+	}
+	if n < s.maxPending {
+		return nil
+	}
+	excess := n - s.maxPending + 1
+	list, err := s.sessions.ListActivePendingByUser(ctx, userID, excess)
+	if err != nil {
+		return err
+	}
+	for i := range list {
+		sess := &list[i]
+		s.abortMultipart(ctx, sess)
+		if err := s.sessions.MarkAborted(ctx, sess.ID); err != nil {
+			return err
+		}
+	}
+	n, err = s.sessions.CountPendingByUser(ctx, userID)
+	if err != nil {
+		return err
+	}
+	if n >= s.maxPending {
+		return ErrUploadTooManyPending
+	}
+	return nil
 }
 
 func (s *UploadService) Abort(ctx context.Context, userID int64, sessionPublicID uuid.UUID) error {

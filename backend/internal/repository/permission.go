@@ -122,19 +122,13 @@ func (r *PermissionRepository) HasGrantedDescendant(ctx context.Context, userID,
 	}
 	var exists bool
 	err := r.pool.QueryRow(ctx, `
-		WITH RECURSIVE desc_tree AS (
-			SELECT id FROM media_objects WHERE id = $1 AND deleted_at IS NULL
-			UNION ALL
-			SELECT m.id
-			FROM media_objects m
-			INNER JOIN desc_tree d ON m.parent_id = d.id
-			WHERE m.deleted_at IS NULL
-		)
 		SELECT EXISTS(
 			SELECT 1
-			FROM desc_tree d
-			JOIN permissions p ON p.resource_id = d.id
-			WHERE d.id != $1
+			FROM object_paths op
+			JOIN media_objects m ON m.id = op.descendant_id AND m.deleted_at IS NULL
+			JOIN permissions p ON p.resource_id = op.descendant_id
+			WHERE op.ancestor_id = $1
+			  AND op.depth > 0
 			  AND p.user_id = $2
 			  AND p.permission = ANY($3)
 			  AND p.revoked_at IS NULL
@@ -148,19 +142,13 @@ func (r *PermissionRepository) HasGrantedDescendant(ctx context.Context, userID,
 func (r *PermissionRepository) HasGrantedDescendantAny(ctx context.Context, userID, ancestorID int64) (bool, error) {
 	var exists bool
 	err := r.pool.QueryRow(ctx, `
-		WITH RECURSIVE desc_tree AS (
-			SELECT id FROM media_objects WHERE id = $1 AND deleted_at IS NULL
-			UNION ALL
-			SELECT m.id
-			FROM media_objects m
-			INNER JOIN desc_tree d ON m.parent_id = d.id
-			WHERE m.deleted_at IS NULL
-		)
 		SELECT EXISTS(
 			SELECT 1
-			FROM desc_tree d
-			JOIN permissions p ON p.resource_id = d.id
-			WHERE d.id != $1
+			FROM object_paths op
+			JOIN media_objects m ON m.id = op.descendant_id AND m.deleted_at IS NULL
+			JOIN permissions p ON p.resource_id = op.descendant_id
+			WHERE op.ancestor_id = $1
+			  AND op.depth > 0
 			  AND p.user_id = $2
 			  AND p.revoked_at IS NULL
 			  AND (p.expires_at IS NULL OR p.expires_at > now())

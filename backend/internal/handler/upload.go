@@ -8,7 +8,7 @@ import (
 	"strings"
 
 	"github.com/anhtuanlc/mediahub/internal/middleware"
-	"github.com/anhtuanlc/mediahub/internal/platform"
+	"github.com/anhtuanlc/mediahub/internal/platform/upload"
 	"github.com/anhtuanlc/mediahub/internal/repository"
 	"github.com/anhtuanlc/mediahub/internal/service"
 	"github.com/gin-gonic/gin"
@@ -152,12 +152,15 @@ func writeUploadError(c *gin.Context, logger *zap.Logger, op string, err error) 
 		return
 	}
 
-	platform.Upload.FailTotal.Add(1)
+	upload.Default.FailTotal.Add(1)
 	switch {
 	case errors.Is(err, service.ErrUploadRateLimited):
 		c.JSON(http.StatusTooManyRequests, gin.H{"error": "rate_limited", "message": "quá nhiều lần bắt đầu upload, thử lại sau"})
 	case errors.Is(err, service.ErrUploadTooManyPending):
-		c.JSON(http.StatusConflict, gin.H{"error": "conflict", "message": "đang có quá nhiều upload chưa hoàn tất"})
+		c.JSON(http.StatusConflict, gin.H{
+			"error":   "conflict",
+			"message": "quá nhiều upload đang chạy song song — hủy upload cũ hoặc đợi vài phút rồi thử lại",
+		})
 	case errors.Is(err, service.ErrUploadTooLarge):
 		c.JSON(http.StatusRequestEntityTooLarge, gin.H{
 			"error":   "payload_too_large",

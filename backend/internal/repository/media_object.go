@@ -171,6 +171,27 @@ func scanMediaObject(row pgx.Row) (*MediaObject, error) {
 	return &m, nil
 }
 
+func (r *MediaObjectRepository) scanMediaObjectRows(ctx context.Context, query string, args ...any) ([]MediaObject, error) {
+	rows, err := r.pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query media objects: %w", err)
+	}
+	defer rows.Close()
+	var list []MediaObject
+	for rows.Next() {
+		var m MediaObject
+		if err := rows.Scan(
+			&m.ID, &m.PublicID, &m.ParentID, &m.ParentPublic, &m.Type, &m.Name, &m.OriginalName,
+			&m.MimeType, &m.SizeBytes, &m.StorageKey, &m.Checksum, &m.ThumbnailKey, &m.Status,
+			&m.CreatedBy, &m.UpdatedBy, &m.DeletedAt, &m.CreatedAt, &m.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		list = append(list, m)
+	}
+	return list, rows.Err()
+}
+
 func (r *MediaObjectRepository) ListChildren(ctx context.Context, parentID int64, f ObjectListFilter) ([]MediaObject, error) {
 	limit := f.Limit
 	if limit <= 0 || limit > 100 {
@@ -497,9 +518,26 @@ func (r *MediaObjectRepository) SoftDelete(ctx context.Context, id, updatedBy in
 	return nil
 }
 
+const subtreePageDefault = 200
+
 // ListActiveInSubtree returns all active objects in the subtree rooted at ancestorID (inclusive).
 func (r *MediaObjectRepository) ListActiveInSubtree(ctx context.Context, ancestorID int64) ([]MediaObject, error) {
-	rows, err := r.pool.Query(ctx, `
+	return r.listActiveInSubtreePage(ctx, ancestorID, 0, 0)
+}
+
+// ListActiveInSubtreePage returns a page of active subtree objects after afterID (0 = start).
+func (r *MediaObjectRepository) ListActiveInSubtreePage(ctx context.Context, ancestorID, afterID int64, limit int) ([]MediaObject, error) {
+	return r.listActiveInSubtreePage(ctx, ancestorID, afterID, limit)
+}
+
+func (r *MediaObjectRepository) listActiveInSubtreePage(ctx context.Context, ancestorID, afterID int64, limit int) ([]MediaObject, error) {
+	unbounded := limit <= 0
+	pageLimit := limit
+	if !unbounded && pageLimit > 500 {
+		pageLimit = subtreePageDefault
+	}
+	args := []any{ancestorID}
+	query := `
 		SELECT m.id, m.public_id, m.parent_id, p.public_id, m.type, m.name, m.original_name,
 		       m.mime_type, m.size_bytes, m.storage_key, m.checksum, m.thumbnail_key, m.status,
 		       m.created_by, m.updated_by, m.deleted_at, m.created_at, m.updated_at
@@ -507,26 +545,18 @@ func (r *MediaObjectRepository) ListActiveInSubtree(ctx context.Context, ancesto
 		JOIN media_objects m ON m.id = op.descendant_id
 		LEFT JOIN media_objects p ON p.id = m.parent_id
 		WHERE op.ancestor_id = $1 AND m.deleted_at IS NULL AND m.status = 'active'
-		ORDER BY m.id ASC
-	`, ancestorID)
-	if err != nil {
-		return nil, fmt.Errorf("list active subtree: %w", err)
+	`
+	if afterID > 0 {
+		query += ` AND m.id > $2`
+		args = append(args, afterID)
 	}
-	defer rows.Close()
-
-	var list []MediaObject
-	for rows.Next() {
-		var m MediaObject
-		if err := rows.Scan(
-			&m.ID, &m.PublicID, &m.ParentID, &m.ParentPublic, &m.Type, &m.Name, &m.OriginalName,
-			&m.MimeType, &m.SizeBytes, &m.StorageKey, &m.Checksum, &m.ThumbnailKey, &m.Status,
-			&m.CreatedBy, &m.UpdatedBy, &m.DeletedAt, &m.CreatedAt, &m.UpdatedAt,
-		); err != nil {
-			return nil, err
-		}
-		list = append(list, m)
+	query += ` ORDER BY m.id ASC`
+	if !unbounded {
+		n := len(args) + 1
+		query += fmt.Sprintf(` LIMIT $%d`, n)
+		args = append(args, pageLimit)
 	}
-	return list, rows.Err()
+	return r.scanMediaObjectRows(ctx, query, args...)
 }
 
 const deletedTrashRootFilter = `
@@ -795,7 +825,22 @@ func (r *MediaObjectRepository) RestoreSubtree(ctx context.Context, ancestorID, 
 
 // ListDeletedInSubtree returns soft-deleted objects under ancestor (including ancestor).
 func (r *MediaObjectRepository) ListDeletedInSubtree(ctx context.Context, ancestorID int64) ([]MediaObject, error) {
-	rows, err := r.pool.Query(ctx, `
+	return r.listDeletedInSubtreePage(ctx, ancestorID, 0, 0)
+}
+
+// ListDeletedInSubtreePage returns a page of soft-deleted subtree objects after afterID.
+func (r *MediaObjectRepository) ListDeletedInSubtreePage(ctx context.Context, ancestorID, afterID int64, limit int) ([]MediaObject, error) {
+	return r.listDeletedInSubtreePage(ctx, ancestorID, afterID, limit)
+}
+
+func (r *MediaObjectRepository) listDeletedInSubtreePage(ctx context.Context, ancestorID, afterID int64, limit int) ([]MediaObject, error) {
+	unbounded := limit <= 0
+	pageLimit := limit
+	if !unbounded && pageLimit > 500 {
+		pageLimit = subtreePageDefault
+	}
+	args := []any{ancestorID}
+	query := `
 		SELECT m.id, m.public_id, m.parent_id, p.public_id, m.type, m.name, m.original_name,
 		       m.mime_type, m.size_bytes, m.storage_key, m.checksum, m.thumbnail_key, m.status,
 		       m.created_by, m.updated_by, m.deleted_at, m.created_at, m.updated_at
@@ -803,26 +848,18 @@ func (r *MediaObjectRepository) ListDeletedInSubtree(ctx context.Context, ancest
 		JOIN object_paths op ON op.descendant_id = m.id
 		LEFT JOIN media_objects p ON p.id = m.parent_id
 		WHERE op.ancestor_id = $1 AND m.deleted_at IS NOT NULL
-		ORDER BY m.id ASC
-	`, ancestorID)
-	if err != nil {
-		return nil, fmt.Errorf("list deleted subtree: %w", err)
+	`
+	if afterID > 0 {
+		query += ` AND m.id > $2`
+		args = append(args, afterID)
 	}
-	defer rows.Close()
-
-	var list []MediaObject
-	for rows.Next() {
-		var m MediaObject
-		if err := rows.Scan(
-			&m.ID, &m.PublicID, &m.ParentID, &m.ParentPublic, &m.Type, &m.Name, &m.OriginalName,
-			&m.MimeType, &m.SizeBytes, &m.StorageKey, &m.Checksum, &m.ThumbnailKey, &m.Status,
-			&m.CreatedBy, &m.UpdatedBy, &m.DeletedAt, &m.CreatedAt, &m.UpdatedAt,
-		); err != nil {
-			return nil, err
-		}
-		list = append(list, m)
+	query += ` ORDER BY m.id ASC`
+	if !unbounded {
+		n := len(args) + 1
+		query += fmt.Sprintf(` LIMIT $%d`, n)
+		args = append(args, pageLimit)
 	}
-	return list, rows.Err()
+	return r.scanMediaObjectRows(ctx, query, args...)
 }
 
 // HardDeleteSubtree permanently removes soft-deleted ancestor and descendants.
@@ -858,19 +895,57 @@ func (r *MediaObjectRepository) SoftDeleteSubtree(ctx context.Context, ancestorI
 
 // RepairClosurePaths removes duplicate closure rows, keeping the minimum depth per pair.
 func (r *MediaObjectRepository) RepairClosurePaths(ctx context.Context) (int64, error) {
-	tag, err := r.pool.Exec(ctx, `
-		DELETE FROM object_paths op
-		WHERE EXISTS (
-			SELECT 1 FROM object_paths newer
-			WHERE newer.ancestor_id = op.ancestor_id
-			  AND newer.descendant_id = op.descendant_id
-			  AND newer.depth < op.depth
-		)
-	`)
-	if err != nil {
-		return 0, fmt.Errorf("repair closure paths: %w", err)
+	const batch = 5000
+	var total int64
+	for {
+		tag, err := r.pool.Exec(ctx, `
+			DELETE FROM object_paths op
+			WHERE ctid IN (
+				SELECT op2.ctid
+				FROM object_paths op2
+				WHERE EXISTS (
+					SELECT 1 FROM object_paths newer
+					WHERE newer.ancestor_id = op2.ancestor_id
+					  AND newer.descendant_id = op2.descendant_id
+					  AND newer.depth < op2.depth
+				)
+				LIMIT $1
+			)
+		`, batch)
+		if err != nil {
+			return total, fmt.Errorf("repair closure paths: %w", err)
+		}
+		n := tag.RowsAffected()
+		total += n
+		if n < batch {
+			break
+		}
 	}
-	return tag.RowsAffected(), nil
+	return total, nil
+}
+
+// MediaObjectSummary holds active object counts for dashboard summaries.
+type MediaObjectSummary struct {
+	Total   int64
+	Folders int64
+	Files   int64 // non-folder objects (file, image, video, …)
+}
+
+// CountActiveSummary counts active media objects grouped for dashboard stats.
+func (r *MediaObjectRepository) CountActiveSummary(ctx context.Context) (*MediaObjectSummary, error) {
+	var s MediaObjectSummary
+	err := r.pool.QueryRow(ctx, `
+		SELECT
+			COUNT(*)::bigint,
+			COUNT(*) FILTER (WHERE type = 'folder')::bigint,
+			COUNT(*) FILTER (WHERE type <> 'folder')::bigint
+		FROM media_objects
+		WHERE deleted_at IS NULL AND status = 'active'
+	`).Scan(&s.Total, &s.Folders, &s.Files)
+	if err != nil {
+		return nil, err
+	}
+	return &s, nil
 }
 
 // CountActiveChildren returns direct and nested active descendants (excluding the folder itself).
@@ -886,6 +961,33 @@ func (r *MediaObjectRepository) CountActiveChildren(ctx context.Context, folderI
 		  AND m.status = 'active'
 	`, folderID).Scan(&n)
 	return n, err
+}
+
+// ReferencedStorageKeysAmong returns which keys in keys exist as storage_key or thumbnail_key in DB.
+func (r *MediaObjectRepository) ReferencedStorageKeysAmong(ctx context.Context, keys []string) (map[string]struct{}, error) {
+	out := make(map[string]struct{})
+	if len(keys) == 0 {
+		return out, nil
+	}
+	rows, err := r.pool.Query(ctx, `
+		SELECT storage_key FROM media_objects
+		WHERE storage_key = ANY($1)
+		UNION
+		SELECT thumbnail_key FROM media_objects
+		WHERE thumbnail_key = ANY($1)
+	`, keys)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var key string
+		if err := rows.Scan(&key); err != nil {
+			return nil, err
+		}
+		out[key] = struct{}{}
+	}
+	return out, rows.Err()
 }
 
 // ListReferencedStorageKeys returns storage_key and thumbnail_key values from all media_objects.

@@ -5,7 +5,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/anhtuanlc/mediahub/internal/platform"
+	"github.com/anhtuanlc/mediahub/internal/platform/postgres"
 	"github.com/anhtuanlc/mediahub/internal/repository"
 	"github.com/google/uuid"
 )
@@ -16,7 +16,7 @@ func testPool(t *testing.T) *repository.MediaObjectRepository {
 	if dsn == "" {
 		dsn = "postgres://mediahub:mediahub@localhost:5432/mediahub?sslmode=disable"
 	}
-	pool, err := platform.NewPostgresPool(context.Background(), dsn)
+	pool, err := postgres.NewPool(context.Background(), dsn)
 	if err != nil {
 		t.Skipf("postgres unavailable: %v", err)
 	}

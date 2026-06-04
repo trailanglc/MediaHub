@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/anhtuanlc/mediahub/internal/platform/resource"
 	"github.com/anhtuanlc/mediahub/internal/repository"
 	"github.com/anhtuanlc/mediahub/internal/storage"
 )
@@ -26,20 +27,38 @@ const (
 //  2. Fire-and-forget goroutine: delete single-key jobs only (fast for any file size).
 //  3. Periodic worker: prefix / failed / saturated immediate queue.
 type StorageCleanupService struct {
-	jobs    *repository.StorageDeletionRepository
-	store   storage.ObjectStorage
-	bgSlots chan struct{}
+	jobs          *repository.StorageDeletionRepository
+	store         storage.ObjectStorage
+	immediateGate *resource.DynamicGate
+	resources     *resource.Reader
 }
 
 func NewStorageCleanupService(
 	jobs *repository.StorageDeletionRepository,
 	store storage.ObjectStorage,
+	resources *resource.Reader,
 ) *StorageCleanupService {
 	return &StorageCleanupService{
-		jobs:    jobs,
-		store:   store,
-		bgSlots: make(chan struct{}, deletionImmediateSlots),
+		jobs:          jobs,
+		store:         store,
+		immediateGate: resource.NewDynamicGate(deletionImmediateSlots),
+		resources:     resources,
 	}
+}
+
+func (s *StorageCleanupService) syncImmediateLimit(ctx context.Context) {
+	if s == nil || s.immediateGate == nil {
+		return
+	}
+	limit := deletionImmediateSlots
+	if s.resources != nil && s.resources.Enabled {
+		if _, lim, err := s.resources.Current(ctx); err == nil {
+			if lim.StorageImmediateSlots >= 1 && lim.StorageImmediateSlots <= deletionImmediateSlots {
+				limit = lim.StorageImmediateSlots
+			}
+		}
+	}
+	s.immediateGate.SetLimit(limit)
 }
 
 // ScheduleDeletion enqueues storage cleanup and kicks a non-blocking fast path for single keys.
@@ -60,6 +79,7 @@ func (s *StorageCleanupService) ScheduleDeletions(ctx context.Context, objects [
 	}
 	const immediateMax = 5
 	if len(objects) <= immediateMax {
+		s.syncImmediateLimit(ctx)
 		for _, m := range objects {
 			if m != nil {
 				go s.runImmediateDeletion(m.ID)
@@ -70,16 +90,14 @@ func (s *StorageCleanupService) ScheduleDeletions(ctx context.Context, objects [
 }
 
 func (s *StorageCleanupService) runImmediateDeletion(objectID int64) {
-	select {
-	case s.bgSlots <- struct{}{}:
-	default:
-		// Worker pool saturated; periodic worker will process jobs.
-		return
-	}
-	defer func() { <-s.bgSlots }()
-
 	ctx, cancel := context.WithTimeout(context.Background(), deletionImmediateTimeout)
 	defer cancel()
+	s.syncImmediateLimit(ctx)
+	if s.immediateGate == nil || !s.immediateGate.TryAcquire() {
+		// Saturated; periodic scheduler will process jobs.
+		return
+	}
+	defer s.immediateGate.Release()
 	_, _ = s.processFastJobsForObject(ctx, objectID)
 }
 

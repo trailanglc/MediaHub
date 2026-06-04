@@ -92,6 +92,14 @@ export function UploadDialog({
     }
   }, [open, uppy]);
 
+  useEffect(() => {
+    return () => {
+      abortRef.current?.abort();
+      uppy.cancelAll();
+      uppy.destroy();
+    };
+  }, [uppy]);
+
   const handleCancelUpload = () => {
     abortRef.current?.abort();
   };

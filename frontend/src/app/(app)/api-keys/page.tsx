@@ -1,10 +1,10 @@
 import { OwnerGuard } from "@/components/layout/owner-guard";
-import { ApiKeysScaffold } from "@/components/admin/feature-scaffold";
+import { ApiKeysPanel } from "@/components/api-keys/api-keys-panel";
 
 export default function ApiKeysPage() {
   return (
     <OwnerGuard>
-      <ApiKeysScaffold />
+      <ApiKeysPanel />
     </OwnerGuard>
   );
 }

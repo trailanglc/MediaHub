@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/anhtuanlc/mediahub/internal/config"
+	"github.com/anhtuanlc/mediahub/internal/platform/rediscache"
 	"github.com/anhtuanlc/mediahub/internal/repository"
 	"github.com/google/uuid"
 )
@@ -43,10 +44,28 @@ type SettingsService struct {
 	repo  *repository.SettingsRepository
 	audit *repository.AuditRepository
 	cfg   *config.Config
+	cache *rediscache.Store
 }
 
-func NewSettingsService(repo *repository.SettingsRepository, audit *repository.AuditRepository, cfg *config.Config) *SettingsService {
-	return &SettingsService{repo: repo, audit: audit, cfg: cfg}
+func NewSettingsService(repo *repository.SettingsRepository, audit *repository.AuditRepository, cfg *config.Config, cache *rediscache.Store) *SettingsService {
+	return &SettingsService{repo: repo, audit: audit, cfg: cfg, cache: cache}
+}
+
+func (s *SettingsService) invalidateCache(ctx context.Context) {
+	if s.cache == nil || !s.cache.Enabled() {
+		return
+	}
+	_ = s.cache.Delete(ctx, rediscache.KeySettingsV1)
+	rediscache.InvalidateAllStreamVideos(ctx, s.cache)
+}
+
+// GlobalAllowedDomains returns streaming global allowlist (uses settings cache).
+func (s *SettingsService) GlobalAllowedDomains(ctx context.Context) ([]string, error) {
+	resp, err := s.Get(ctx)
+	if err != nil || resp == nil {
+		return nil, err
+	}
+	return append([]string(nil), resp.Editable.Streaming.GlobalAllowedDomains...), nil
 }
 
 type SettingsWorkspace struct {
@@ -158,6 +177,25 @@ type SettingsMaintenancePatch struct {
 }
 
 func (s *SettingsService) Get(ctx context.Context) (*SettingsResponse, error) {
+	if s.cache != nil && s.cache.Enabled() {
+		var cached SettingsResponse
+		if hit, err := s.cache.GetJSON(ctx, rediscache.KeySettingsV1, &cached); err != nil {
+			return nil, err
+		} else if hit {
+			return &cached, nil
+		}
+	}
+	resp, err := s.loadSettings(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if s.cache != nil && s.cache.Enabled() {
+		_ = s.cache.SetJSON(ctx, rediscache.KeySettingsV1, resp, rediscache.TTLSettings)
+	}
+	return resp, nil
+}
+
+func (s *SettingsService) loadSettings(ctx context.Context) (*SettingsResponse, error) {
 	raw, err := s.repo.GetAll(ctx)
 	if err != nil {
 		return nil, err
@@ -185,6 +223,7 @@ func (s *SettingsService) Update(ctx context.Context, patch SettingsPatch, actor
 		meta[u.Key] = "updated"
 	}
 	_ = s.audit.Log(ctx, &actorID, "settings.update", "system_settings", nil, ip, userAgent, meta)
+	s.invalidateCache(ctx)
 	return s.Get(ctx)
 }
 
@@ -335,6 +374,83 @@ func (s *SettingsService) patchToUpserts(patch SettingsPatch) ([]repository.Sett
 	}
 
 	return upserts, nil
+}
+
+// PurgeExpiredAuditLogs deletes audit_logs older than maintenance.audit_retention_days (0 = disabled).
+func (s *SettingsService) PurgeExpiredAuditLogs(ctx context.Context) (int, error) {
+	if s.audit == nil {
+		return 0, nil
+	}
+	cutoff, days, err := s.maintenanceCutoff(ctx)
+	if err != nil {
+		return 0, err
+	}
+	if days <= 0 {
+		return 0, nil
+	}
+	n, err := s.audit.DeleteOlderThan(ctx, cutoff, 1000)
+	if err != nil {
+		return 0, err
+	}
+	return int(n), nil
+}
+
+// PurgeOldJobRecords deletes terminal convert/storage-deletion jobs using audit retention days.
+func (s *SettingsService) PurgeOldJobRecords(ctx context.Context, videos *repository.VideoRepository, deletions *repository.StorageDeletionRepository) (int, error) {
+	cutoff, days, err := s.maintenanceCutoff(ctx)
+	if err != nil {
+		return 0, err
+	}
+	if days <= 0 {
+		return 0, nil
+	}
+	total := int64(0)
+	if videos != nil {
+		n, err := videos.DeleteFinishedJobsOlderThan(ctx, cutoff, 1000)
+		if err != nil {
+			return 0, err
+		}
+		total += n
+	}
+	if deletions != nil {
+		n, err := deletions.DeleteTerminalOlderThan(ctx, cutoff, 1000)
+		if err != nil {
+			return 0, err
+		}
+		total += n
+	}
+	return int(total), nil
+}
+
+func (s *SettingsService) maintenanceCutoff(ctx context.Context) (time.Time, int, error) {
+	settings, err := s.Get(ctx)
+	if err != nil {
+		return time.Time{}, 0, err
+	}
+	days := settings.Editable.Maintenance.AuditRetentionDays
+	if days <= 0 {
+		return time.Time{}, 0, nil
+	}
+	return time.Now().Add(-time.Duration(days) * 24 * time.Hour), days, nil
+}
+
+// PurgeStaleRefreshTokens deletes expired/revoked refresh tokens using audit retention days.
+func (s *SettingsService) PurgeStaleRefreshTokens(ctx context.Context, refresh *repository.RefreshTokenRepository) (int, error) {
+	if refresh == nil {
+		return 0, nil
+	}
+	cutoff, days, err := s.maintenanceCutoff(ctx)
+	if err != nil {
+		return 0, err
+	}
+	if days <= 0 {
+		return 0, nil
+	}
+	n, err := refresh.DeleteStale(ctx, cutoff, 1000)
+	if err != nil {
+		return 0, err
+	}
+	return int(n), nil
 }
 
 // DeleteEmptyFoldersOnly returns whether folder delete requires an empty folder.

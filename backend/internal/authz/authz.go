@@ -105,6 +105,7 @@ func (s *Service) CapabilitiesMap(
 	if IsOwnerRole(role) {
 		full := Capabilities{
 			Read: true, Upload: true, Update: true, Delete: true, Manage: true, Download: true,
+			Convert: true, Stream: true,
 		}
 		for _, id := range resourceIDs {
 			out[id] = full
@@ -129,6 +130,8 @@ type Capabilities struct {
 	Delete   bool
 	Manage   bool
 	Download bool
+	Convert  bool
+	Stream   bool
 }
 
 func capabilitiesFromPermSet(perms map[string]struct{}) Capabilities {
@@ -146,5 +149,7 @@ func capabilitiesFromPermSet(perms map[string]struct{}) Capabilities {
 		Delete:   has(string(ActionDelete)),
 		Manage:   has(string(ActionManage)),
 		Download: has(string(ActionDownload)),
+		Convert:  has(string(ActionConvert)),
+		Stream:   has(string(ActionStream)),
 	}
 }

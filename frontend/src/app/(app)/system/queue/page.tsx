@@ -1,10 +1,10 @@
 import { OwnerGuard } from "@/components/layout/owner-guard";
-import { QueueScaffold } from "@/components/admin/feature-scaffold";
+import { SystemQueuePanel } from "@/components/system/system-queue-panel";
 
 export default function QueuePage() {
   return (
     <OwnerGuard>
-      <QueueScaffold />
+      <SystemQueuePanel />
     </OwnerGuard>
   );
 }

@@ -189,19 +189,24 @@ export function SystemHealthDashboard({
   const { data, isLoading, error, dataUpdatedAt, isFetching, refetch } = useQuery({
     queryKey: SYSTEM_HEALTH_QUERY_KEY,
     queryFn: fetchSystemHealth,
-    refetchInterval: () =>
-      typeof document !== "undefined" && document.visibilityState === "visible"
+    refetchInterval: () => {
+      if (embedded) return false;
+      return typeof document !== "undefined" &&
+        document.visibilityState === "visible"
         ? REFRESH_MS
-        : false,
+        : false;
+    },
     refetchIntervalInBackground: false,
   });
 
   const overall = data?.status ?? "unknown";
   const storageStats = parseStorageStats(data?.components?.storage?.details);
 
-  const description = data?.metrics_cache_ttl_seconds
-    ? `Metrics cache ${data.metrics_cache_ttl_seconds}s — UI làm mới mỗi ${REFRESH_MS / 1000}s`
-    : `CPU, RAM, storage và dịch vụ — làm mới mỗi ${REFRESH_MS / 1000}s`;
+  const description = embedded
+    ? "Tóm tắt sức khỏe hệ thống — làm mới thủ công hoặc tại trang System Health"
+    : data?.metrics_cache_ttl_seconds
+      ? `Metrics cache ${data.metrics_cache_ttl_seconds}s — UI làm mới mỗi ${REFRESH_MS / 1000}s`
+      : `CPU, RAM, storage và dịch vụ — làm mới mỗi ${REFRESH_MS / 1000}s`;
 
   const statusMeta = data ? (
     <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">

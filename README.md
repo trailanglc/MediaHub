@@ -24,17 +24,27 @@ Monorepo gồm **backend** (Go, Gin) và **frontend** (Next.js).
 |----------|----------|
 | [docs/INSTALL.md](docs/INSTALL.md) | Cài đặt, Docker, migrate, chạy API + scheduler + frontend |
 | [docs/USAGE.md](docs/USAGE.md) | Auth, members, File Manager, settings, kiểm thử |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Bản đồ thư mục, luồng request, vai trò `cmd/*` |
 | [mediahub_production_spec.md](mediahub_production_spec.md) | Đặc tả kiến trúc / production |
 | [LICENSE](LICENSE) | Điều khoản sử dụng, phi thương mại, cấp phép thương mại |
 
 ## Cấu trúc repo
 
 ```txt
-backend/       API (cmd/api), scheduler (cmd/scheduler), migrations
+backend/       Go API và binary nền (xem docs/ARCHITECTURE.md)
+  cmd/api          HTTP API (Gin)
+  cmd/scheduler    Bảo trì định kỳ (trash, storage cleanup, …)
+  cmd/worker       Hàng đợi Asynq (video convert — khi bật)
+  cmd/migrate      Database migrations
+  cmd/reset        Xóa dữ liệu ứng dụng (giữ volume Docker)
+  cmd/orphan-cleanup  Quét blob MinIO không còn tham chiếu DB
 frontend/      Next.js dashboard
-deployments/   Docker Compose (Postgres, MinIO, Redis)
-docs/          Tài liệu cài đặt và sử dụng
+deployments/   Docker Compose (Postgres, MinIO, Redis) + ví dụ nginx
+docs/          Cài đặt, sử dụng, kiến trúc thư mục
+scripts/       wait-postgres, security-smoke
 ```
+
+Chi tiết layer backend / frontend: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Khởi động nhanh
 
@@ -43,11 +53,9 @@ cp deployments/.env.example deployments/.env
 cp backend/.env.example backend/.env
 cp frontend/.env.example frontend/.env.local
 
-make infra-up
-make migrate-up
-make api          # terminal 1
-make scheduler    # terminal 2
-make fe           # terminal 3 (pnpm install trong frontend lần đầu)
+make dev-full     # infra + migrate + API + scheduler + worker + FE (một terminal)
+
+# Hoặc từng bước / nhiều terminal: xem docs/INSTALL.md
 ```
 
 Mở http://localhost:3000/setup để tạo Owner. Chi tiết: [docs/INSTALL.md](docs/INSTALL.md).

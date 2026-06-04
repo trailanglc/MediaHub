@@ -1,5 +1,5 @@
-import { VideosScaffold } from "@/components/admin/feature-scaffold";
+import { VideosList } from "@/components/videos/videos-list";
 
 export default function VideosPage() {
-  return <VideosScaffold />;
+  return <VideosList />;
 }

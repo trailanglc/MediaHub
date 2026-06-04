@@ -51,22 +51,6 @@ function PreviewMedia({
     );
   }
 
-  if (object.type === "video" && url) {
-    return (
-      <div className="overflow-hidden rounded-xl bg-black ring-1 ring-border/60">
-        <video
-          src={url}
-          controls
-          playsInline
-          className="max-h-[min(70vh,720px)] w-full bg-black"
-          preload="metadata"
-        >
-          Trình duyệt không hỗ trợ phát video.
-        </video>
-      </div>
-    );
-  }
-
   if (object.type === "video") {
     return (
       <p className="rounded-xl bg-muted/50 p-4 text-sm text-muted-foreground">

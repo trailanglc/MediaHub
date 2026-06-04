@@ -36,7 +36,7 @@ export async function proxy(request: NextRequest) {
     const res = await fetch(`${API_URL}/api/auth/me`, {
       headers: { Cookie: `access_token=${access}` },
       cache: "no-store",
-      signal: AbortSignal.timeout(3000),
+      signal: AbortSignal.timeout(8000),
     });
     authenticated = res.ok;
   } catch {

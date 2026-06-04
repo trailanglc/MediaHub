@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -15,12 +16,17 @@ const (
 )
 
 type Config struct {
-	AppEnv  string
-	AppURL  string
-	APIAddr string
+	AppEnv        string
+	AppURL        string
+	APIPublicURL  string
+	APIAddr       string
 
 	DBDSN     string
 	RedisAddr string
+	RedisPoolSize        int
+	RedisMinIdleConns    int
+	RedisReadTimeout     time.Duration
+	RedisWriteTimeout    time.Duration
 
 	Storage StorageConfig
 
@@ -35,12 +41,30 @@ type Config struct {
 	FFmpegPath          string
 	FFprobePath         string
 	StreamSigningSecret string
+	ConvertMaxConcurrent int
+	ConvertMinConcurrent int
+	ConvertJobTimeout    time.Duration
+	StreamRateLimitPerMin int
+
+	// RedisFailClosed: when true (production/staging), Redis errors deny login lockout checks and stream rate limits.
+	RedisFailClosed bool
+
+	// TrustedProxies: CIDRs or IPs for gin trusted reverse proxies (ClientIP, X-Forwarded-*).
+	TrustedProxies []string
 
 	// HealthMetricsCacheTTL: cache host + storage usage metrics for system health.
 	HealthMetricsCacheTTL time.Duration
 
 	UploadInitPerMinute      int
 	MaxPendingUploadsPerUser int
+
+	// Resource governor: adaptive limits from host/Redis idle %.
+	ResourceGovernorEnabled     bool
+	ResourceSampleInterval      time.Duration
+	ResourceCPUReservePercent   int
+	ResourceRAMMinIdlePercent   int
+	ResourceRedisMaxUsedPercent int
+	ResourceGovernorPublish     bool
 }
 
 type StorageConfig struct {
@@ -59,9 +83,14 @@ func Load() (*Config, error) {
 	cfg := &Config{
 		AppEnv:              getEnv("APP_ENV", "development"),
 		AppURL:              getEnv("APP_URL", "http://localhost:3000"),
+		APIPublicURL:        getEnv("API_PUBLIC_URL", "http://localhost:8080"),
 		APIAddr:             getEnv("API_ADDR", ":8080"),
 		DBDSN:               os.Getenv("DB_DSN"),
 		RedisAddr:           getEnv("REDIS_ADDR", "localhost:6379"),
+		RedisPoolSize:        getEnvInt("REDIS_POOL_SIZE", 32),
+		RedisMinIdleConns:    getEnvInt("REDIS_MIN_IDLE_CONNS", 8),
+		RedisReadTimeout:     getEnvDuration("REDIS_READ_TIMEOUT", 3*time.Second),
+		RedisWriteTimeout:    getEnvDuration("REDIS_WRITE_TIMEOUT", 3*time.Second),
 		JWTSecret:           os.Getenv("JWT_SECRET"),
 		JWTAccessTTL:        defaultJWTAccessTTL,
 		JWTRefreshTTL:       getEnvDuration("JWT_REFRESH_TTL", defaultJWTRefreshTTL),
@@ -71,11 +100,21 @@ func Load() (*Config, error) {
 		RequireEncryptedPassword: getEnvBool("REQUIRE_ENCRYPTED_PASSWORD", false),
 		SetupToken:          os.Getenv("SETUP_TOKEN"),
 		FFmpegPath:          getEnv("FFMPEG_PATH", "/usr/bin/ffmpeg"),
-		FFprobePath:         getEnv("FFPROBE_PATH", "/usr/bin/ffprobe"),
-		StreamSigningSecret:     os.Getenv("STREAM_SIGNING_SECRET"),
-		HealthMetricsCacheTTL:    defaultHealthMetricsCacheTTL,
+		FFprobePath:           getEnv("FFPROBE_PATH", "/usr/bin/ffprobe"),
+		StreamSigningSecret:   os.Getenv("STREAM_SIGNING_SECRET"),
+		ConvertMaxConcurrent:  getEnvInt("CONVERT_MAX_CONCURRENT", 2),
+		ConvertMinConcurrent:  getEnvInt("CONVERT_MIN_CONCURRENT", 1),
+		ConvertJobTimeout:     getEnvDuration("CONVERT_JOB_TIMEOUT", 2*time.Hour),
+		StreamRateLimitPerMin: getEnvInt("STREAM_RATE_LIMIT_PER_MIN", 120),
+		HealthMetricsCacheTTL: defaultHealthMetricsCacheTTL,
 		UploadInitPerMinute:      getEnvInt("UPLOAD_INIT_PER_MINUTE", 60),
 		MaxPendingUploadsPerUser: getEnvInt("UPLOAD_MAX_PENDING_PER_USER", 10),
+		ResourceGovernorEnabled:     getEnvBool("RESOURCE_GOVERNOR_ENABLED", true),
+		ResourceSampleInterval:      getEnvDuration("RESOURCE_SAMPLE_INTERVAL", 10*time.Second),
+		ResourceCPUReservePercent:   getEnvInt("RESOURCE_CPU_RESERVE_PERCENT", 40),
+		ResourceRAMMinIdlePercent:   getEnvInt("RESOURCE_RAM_MIN_IDLE_PERCENT", 15),
+		ResourceRedisMaxUsedPercent: getEnvInt("RESOURCE_REDIS_MAX_USED_PERCENT", 85),
+		ResourceGovernorPublish:     getEnvBool("RESOURCE_GOVERNOR_PUBLISH", false),
 		Storage: StorageConfig{
 			Driver:       getEnv("STORAGE_DRIVER", "s3"),
 			Endpoint:     os.Getenv("STORAGE_ENDPOINT"),
@@ -103,8 +142,32 @@ func Load() (*Config, error) {
 	if cfg.AppEnv == "production" {
 		cfg.RequireEncryptedPassword = true
 	}
+	if cfg.StreamSigningSecret == "" && cfg.AppEnv == "development" {
+		cfg.StreamSigningSecret = "dev_stream_signing_secret"
+	}
+	if requireSecrets && cfg.StreamSigningSecret == "" {
+		return nil, fmt.Errorf("STREAM_SIGNING_SECRET is required when APP_ENV=%s", cfg.AppEnv)
+	}
+
+	cfg.RedisFailClosed = requireSecrets
+	cfg.TrustedProxies = parseTrustedProxies(os.Getenv("TRUSTED_PROXIES"))
 
 	return cfg, nil
+}
+
+func parseTrustedProxies(raw string) []string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return []string{"127.0.0.1", "::1"}
+	}
+	var out []string
+	for _, p := range strings.Split(raw, ",") {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 func getEnv(key, fallback string) string {

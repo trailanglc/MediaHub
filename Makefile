@@ -1,4 +1,9 @@
-.PHONY: infra-up infra-down infra-reset migrate-up migrate-down reset reset-data api scheduler worker fe dev orphan-cleanup orphan-cleanup-apply
+.PHONY: infra-up infra-down infra-reset migrate-up migrate-down reset reset-data api scheduler worker fe dev dev-all dev-full orphan-cleanup orphan-cleanup-apply test test-backend
+
+test: test-backend
+
+test-backend:
+	cd backend && go test ./... -count=1 -short
 
 COMPOSE_FILE := deployments/docker-compose.yml
 COMPOSE_ENV  := --env-file deployments/.env
@@ -52,7 +57,7 @@ api:
 scheduler:
 	cd backend && go run ./cmd/scheduler
 
-# Video convert queue (asynq) — tạm chưa dùng khi chưa bật Video Manager.
+# Video convert queue (Asynq + FFmpeg) — cần khi dùng /videos.
 worker:
 	cd backend && go run ./cmd/worker
 
@@ -67,5 +72,19 @@ orphan-cleanup-apply:
 fe:
 	cd frontend && pnpm dev
 
+# Một terminal: API + scheduler + worker + Next.js (cần infra + migrate trước).
+dev-all:
+	@chmod +x scripts/dev-all.sh
+	@exec ./scripts/dev-all.sh
+
+# Dừng stack dev sót sau Ctrl+C (go-build binary, go run, next dev).
+dev-stop:
+	@chmod +x scripts/dev-stop.sh
+	@./scripts/dev-stop.sh
+
+# Infra + migrate + dev-all (khởi động nhanh toàn bộ stack dev).
+dev-full: infra-up migrate-up dev-all
+
 dev: infra-up migrate-up
-	@echo "Chạy API: make api | Scheduler: make scheduler | FE: make fe"
+	@echo "Chạy tất cả trong một terminal: make dev-all"
+	@echo "Hoặc từng service: make api | make scheduler | make worker | make fe"

@@ -170,6 +170,36 @@ func (r *UploadSessionRepository) CountPendingByUser(ctx context.Context, userID
 	return n, err
 }
 
+// ListActivePendingByUser returns non-expired pending sessions oldest first (for cleanup).
+func (r *UploadSessionRepository) ListActivePendingByUser(ctx context.Context, userID int64, limit int) ([]UploadSession, error) {
+	if limit <= 0 {
+		return nil, nil
+	}
+	if limit > 500 {
+		limit = 500
+	}
+	rows, err := r.pool.Query(ctx, `
+		SELECT `+uploadSessionSelectCols+`
+		FROM upload_sessions
+		WHERE user_id = $1 AND status = 'pending' AND expires_at > now()
+		ORDER BY created_at ASC
+		LIMIT $2
+	`, userID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var list []UploadSession
+	for rows.Next() {
+		s, err := scanUploadSession(rows)
+		if err != nil {
+			return nil, err
+		}
+		list = append(list, *s)
+	}
+	return list, rows.Err()
+}
+
 func (r *UploadSessionRepository) MarkAborted(ctx context.Context, sessionID int64) error {
 	_, err := r.pool.Exec(ctx, `
 		UPDATE upload_sessions SET status = 'aborted', updated_at = now()

@@ -8,10 +8,11 @@ import (
 	"fmt"
 	"io"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/anhtuanlc/mediahub/internal/config"
-	"github.com/anhtuanlc/mediahub/internal/platform"
+	"github.com/anhtuanlc/mediahub/internal/platform/cache"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awscfg "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
@@ -26,7 +27,7 @@ type S3Storage struct {
 	accessKey  string
 	secretKey  string
 	quotaBytes int64
-	statsCache *platform.TTLCache[*StorageStats]
+	statsCache *cache.TTLCache[*StorageStats]
 }
 
 func NewS3Storage(ctx context.Context, cfg config.StorageConfig, metricsCacheTTL time.Duration) (*S3Storage, error) {
@@ -65,9 +66,9 @@ func NewS3Storage(ctx context.Context, cfg config.StorageConfig, metricsCacheTTL
 		o.ResponseChecksumValidation = aws.ResponseChecksumValidationWhenRequired
 	})
 
-	var statsCache *platform.TTLCache[*StorageStats]
+	var statsCache *cache.TTLCache[*StorageStats]
 	if metricsCacheTTL > 0 {
-		statsCache = platform.NewTTLCache[*StorageStats](metricsCacheTTL)
+		statsCache = cache.NewTTLCache[*StorageStats](metricsCacheTTL)
 	}
 	return &S3Storage{
 		client:     client,
@@ -153,6 +154,60 @@ func (s *S3Storage) GetObject(ctx context.Context, key string) (io.ReadCloser, e
 		return nil, fmt.Errorf("get object %s: %w", key, err)
 	}
 	return out.Body, nil
+}
+
+func (s *S3Storage) StatObject(ctx context.Context, key string) (*ObjectInfo, error) {
+	out, err := s.client.HeadObject(ctx, &s3.HeadObjectInput{
+		Bucket: aws.String(s.bucket),
+		Key:    aws.String(key),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("head object %s: %w", key, err)
+	}
+	return headToObjectInfo(out), nil
+}
+
+func (s *S3Storage) GetObjectRange(ctx context.Context, key string, offset, length int64) (io.ReadCloser, *ObjectInfo, error) {
+	if offset < 0 {
+		offset = 0
+	}
+	rangeVal := fmt.Sprintf("bytes=%d-", offset)
+	if length >= 0 {
+		rangeVal = fmt.Sprintf("bytes=%d-%d", offset, offset+length-1)
+	}
+	out, err := s.client.GetObject(ctx, &s3.GetObjectInput{
+		Bucket: aws.String(s.bucket),
+		Key:    aws.String(key),
+		Range:  aws.String(rangeVal),
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("get object range %s: %w", key, err)
+	}
+	info := &ObjectInfo{}
+	if out.ContentLength != nil {
+		info.Size = *out.ContentLength
+	}
+	if out.ContentType != nil {
+		info.ContentType = *out.ContentType
+	}
+	if out.ETag != nil {
+		info.ETag = strings.Trim(*out.ETag, "\"")
+	}
+	return out.Body, info, nil
+}
+
+func headToObjectInfo(out *s3.HeadObjectOutput) *ObjectInfo {
+	info := &ObjectInfo{}
+	if out.ContentLength != nil {
+		info.Size = *out.ContentLength
+	}
+	if out.ContentType != nil {
+		info.ContentType = *out.ContentType
+	}
+	if out.ETag != nil {
+		info.ETag = strings.Trim(*out.ETag, "\"")
+	}
+	return info
 }
 
 func (s *S3Storage) DeleteObject(ctx context.Context, key string) error {
@@ -346,23 +401,42 @@ func (s *S3Storage) HashObjectSHA256(ctx context.Context, key string, sizeBytes 
 
 // ListObjectKeys returns all object keys under prefix (paginated).
 func (s *S3Storage) ListObjectKeys(ctx context.Context, prefix string) ([]string, error) {
-	paginator := s3.NewListObjectsV2Paginator(s.client, &s3.ListObjectsV2Input{
-		Bucket: aws.String(s.bucket),
-		Prefix: aws.String(prefix),
-	})
 	var keys []string
+	err := s.ForEachObjectKeyPage(ctx, prefix, 1000, func(page []string) error {
+		keys = append(keys, page...)
+		return nil
+	})
+	return keys, err
+}
+
+// ForEachObjectKeyPage invokes fn for each page of keys under prefix without loading all into memory.
+func (s *S3Storage) ForEachObjectKeyPage(ctx context.Context, prefix string, pageSize int, fn func([]string) error) error {
+	if pageSize <= 0 {
+		pageSize = 1000
+	}
+	paginator := s3.NewListObjectsV2Paginator(s.client, &s3.ListObjectsV2Input{
+		Bucket:  aws.String(s.bucket),
+		Prefix:  aws.String(prefix),
+		MaxKeys: aws.Int32(int32(pageSize)),
+	})
 	for paginator.HasMorePages() {
 		page, err := paginator.NextPage(ctx)
 		if err != nil {
-			return keys, fmt.Errorf("list prefix %s: %w", prefix, err)
+			return fmt.Errorf("list prefix %s: %w", prefix, err)
 		}
+		batch := make([]string, 0, len(page.Contents))
 		for _, obj := range page.Contents {
 			if obj.Key != nil && *obj.Key != "" {
-				keys = append(keys, *obj.Key)
+				batch = append(batch, *obj.Key)
+			}
+		}
+		if len(batch) > 0 {
+			if err := fn(batch); err != nil {
+				return err
 			}
 		}
 	}
-	return keys, nil
+	return nil
 }
 
 // DeleteObjectsOlderThan removes objects under prefix with LastModified before cutoff.

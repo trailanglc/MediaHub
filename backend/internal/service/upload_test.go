@@ -7,7 +7,7 @@ import (
 
 	"github.com/anhtuanlc/mediahub/internal/authz"
 	"github.com/anhtuanlc/mediahub/internal/config"
-	"github.com/anhtuanlc/mediahub/internal/platform"
+	"github.com/anhtuanlc/mediahub/internal/platform/postgres"
 	"github.com/anhtuanlc/mediahub/internal/repository"
 	"github.com/anhtuanlc/mediahub/internal/service"
 	"github.com/anhtuanlc/mediahub/internal/storage"
@@ -31,7 +31,7 @@ func TestUploadInit(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	pool, err := platform.NewPostgresPool(ctx, dsn)
+	pool, err := postgres.NewPool(ctx, dsn)
 	if err != nil {
 		t.Skipf("postgres: %v", err)
 	}
@@ -52,7 +52,7 @@ func TestUploadInit(t *testing.T) {
 	settingsRepo := repository.NewSettingsRepository(pool)
 	auditRepo := repository.NewAuditRepository(pool)
 	permRepo := repository.NewPermissionRepository(pool)
-	settingsSvc := service.NewSettingsService(settingsRepo, auditRepo, cfg)
+	settingsSvc := service.NewSettingsService(settingsRepo, auditRepo, cfg, nil)
 	authzSvc := authz.NewService(permRepo)
 	uploadRepo := repository.NewUploadSessionRepository(pool)
 	mediaSvc := service.NewMediaObjectService(mediaRepo, settingsSvc, authzSvc, auditRepo, store, nil, nil)

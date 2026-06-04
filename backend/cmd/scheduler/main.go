@@ -10,6 +10,11 @@ import (
 	"github.com/anhtuanlc/mediahub/internal/background"
 	"github.com/anhtuanlc/mediahub/internal/config"
 	"github.com/anhtuanlc/mediahub/internal/platform"
+	"github.com/anhtuanlc/mediahub/internal/platform/postgres"
+	"github.com/anhtuanlc/mediahub/internal/platform/rediscache"
+	platredis "github.com/anhtuanlc/mediahub/internal/platform/redis"
+	"github.com/anhtuanlc/mediahub/internal/platform/resource"
+	"github.com/anhtuanlc/mediahub/internal/platform/upload"
 	"github.com/anhtuanlc/mediahub/internal/repository"
 	"github.com/anhtuanlc/mediahub/internal/service"
 	"github.com/anhtuanlc/mediahub/internal/storage"
@@ -34,13 +39,13 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	pool, err := platform.NewPostgresPool(ctx, cfg.DBDSN)
+	pool, err := postgres.NewPool(ctx, cfg.DBDSN)
 	if err != nil {
 		logger.Fatal("postgres", zap.Error(err))
 	}
 	defer pool.Close()
 
-	redisClient := platform.NewRedisClient(cfg.RedisAddr)
+	redisClient := platredis.NewClientFromConfig(cfg)
 	defer redisClient.Close()
 
 	store, err := storage.NewS3Storage(ctx, cfg.Storage, cfg.HealthMetricsCacheTTL)
@@ -49,18 +54,21 @@ func main() {
 	}
 
 	mediaRepo := repository.NewMediaObjectRepository(pool)
+	videoRepo := repository.NewVideoRepository(pool)
+	refreshRepo := repository.NewRefreshTokenRepository(pool)
 	settingsRepo := repository.NewSettingsRepository(pool)
 	auditRepo := repository.NewAuditRepository(pool)
 	permRepo := repository.NewPermissionRepository(pool)
 	uploadRepo := repository.NewUploadSessionRepository(pool)
 	deletionRepo := repository.NewStorageDeletionRepository(pool)
 
-	settingsSvc := service.NewSettingsService(settingsRepo, auditRepo, cfg)
+	settingsSvc := service.NewSettingsService(settingsRepo, auditRepo, cfg, rediscache.NewStore(redisClient))
 	authzSvc := authz.NewService(permRepo)
-	storageCleanup := service.NewStorageCleanupService(deletionRepo, store)
+	resReader := resource.NewReaderFromConfig(cfg, redisClient)
+	storageCleanup := service.NewStorageCleanupService(deletionRepo, store, resReader)
 	thumbnailSvc := service.NewThumbnailService(mediaRepo, store)
 	mediaSvc := service.NewMediaObjectService(mediaRepo, settingsSvc, authzSvc, auditRepo, store, storageCleanup, thumbnailSvc)
-	uploadLimiter := platform.NewUploadRateLimiter(redisClient, cfg.UploadInitPerMinute)
+	uploadLimiter := upload.NewRateLimiter(redisClient, cfg.UploadInitPerMinute)
 	uploadSvc := service.NewUploadService(uploadRepo, mediaSvc, pool, store, thumbnailSvc, uploadLimiter, cfg.MaxPendingUploadsPerUser)
 
 	sched := &background.Scheduler{
@@ -70,6 +78,10 @@ func main() {
 		DeletionRepo:   deletionRepo,
 		Media:          mediaSvc,
 		MediaRepo:      mediaRepo,
+		Settings:       settingsSvc,
+		Videos:         videoRepo,
+		Refresh:        refreshRepo,
+		Resources:      resReader,
 	}
 
 	logger.Info("scheduler starting")

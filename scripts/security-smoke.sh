@@ -43,6 +43,21 @@ if echo "$cors" | grep -qi 'evil.example'; then
 fi
 green "OK   CORS does not reflect evil origin"
 
+# Stream without token must be forbidden
+FAKE_VID="00000000-0000-4000-8000-000000000099"
+code=$(curl -s -o /tmp/sec-body.txt -w '%{http_code}' \
+  "$API_URL/stream/$FAKE_VID/master.m3u8")
+expect_status "stream without token" "403" "$code" "$(cat /tmp/sec-body.txt)"
+
+# Path traversal in stream URL
+code=$(curl -s -o /tmp/sec-body.txt -w '%{http_code}' \
+  "$API_URL/stream/$FAKE_VID/..%2F..%2Fsecret.m3u8?token=x&exp=1")
+if [[ "$code" != "400" && "$code" != "403" ]]; then
+  red "FAIL stream path traversal: expected 400 or 403, got $code — $(cat /tmp/sec-body.txt)"
+  exit 1
+fi
+green "OK   stream path traversal rejected ($code)"
+
 if [[ -z "${OWNER_EMAIL:-}" || -z "${OWNER_PASSWORD:-}" ]]; then
   echo "Skip login tests: set OWNER_EMAIL and OWNER_PASSWORD"
   exit 0

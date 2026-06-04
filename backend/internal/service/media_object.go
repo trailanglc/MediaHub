@@ -824,22 +824,8 @@ func (s *MediaObjectService) Purge(ctx context.Context, userID int64, role strin
 }
 
 func (s *MediaObjectService) purgeSubtree(ctx context.Context, m *repository.MediaObject) (int64, error) {
-	subtree, err := s.objects.ListDeletedInSubtree(ctx, m.ID)
-	if err != nil {
+	if err := s.scheduleDeletedSubtreeDeletions(ctx, m.ID); err != nil {
 		return 0, err
-	}
-	if len(subtree) == 0 {
-		return 0, repository.ErrMediaObjectNotFound
-	}
-
-	if s.storageCleanup != nil {
-		ptrs := make([]*repository.MediaObject, len(subtree))
-		for i := range subtree {
-			ptrs[i] = &subtree[i]
-		}
-		if err := s.storageCleanup.ScheduleDeletions(ctx, ptrs); err != nil {
-			return 0, fmt.Errorf("schedule storage deletion: %w", err)
-		}
 	}
 
 	purgedCount, err := s.objects.HardDeleteSubtree(ctx, m.ID)
@@ -962,11 +948,6 @@ func (s *MediaObjectService) Delete(ctx context.Context, userID int64, role stri
 		}
 	}
 
-	subtree, err := s.objects.ListActiveInSubtree(ctx, m.ID)
-	if err != nil {
-		return nil, err
-	}
-
 	deletedCount, err := s.objects.SoftDeleteSubtree(ctx, m.ID, userID)
 	if err != nil {
 		return nil, err
@@ -975,12 +956,8 @@ func (s *MediaObjectService) Delete(ctx context.Context, userID int64, role stri
 		return nil, repository.ErrMediaObjectNotFound
 	}
 
-	if s.storageCleanup != nil && len(subtree) > 0 {
-		ptrs := make([]*repository.MediaObject, len(subtree))
-		for i := range subtree {
-			ptrs[i] = &subtree[i]
-		}
-		if err := s.storageCleanup.ScheduleDeletions(ctx, ptrs); err != nil {
+	if s.storageCleanup != nil {
+		if err := s.scheduleDeletedSubtreeDeletions(ctx, m.ID); err != nil {
 			return nil, fmt.Errorf("schedule storage deletion: %w", err)
 		}
 	}
@@ -991,6 +968,35 @@ func (s *MediaObjectService) Delete(ctx context.Context, userID int64, role stri
 	}
 	_ = s.audit.Log(ctx, &userID, "object.delete", m.Type, &tid, ip, ua, meta)
 	return &DeleteObjectResult{DeletedCount: deletedCount}, nil
+}
+
+const subtreeDeletionBatch = 200
+
+func (s *MediaObjectService) scheduleDeletedSubtreeDeletions(ctx context.Context, ancestorID int64) error {
+	if s.storageCleanup == nil {
+		return nil
+	}
+	afterID := int64(0)
+	for {
+		batch, err := s.objects.ListDeletedInSubtreePage(ctx, ancestorID, afterID, subtreeDeletionBatch)
+		if err != nil {
+			return err
+		}
+		if len(batch) == 0 {
+			return repository.ErrMediaObjectNotFound
+		}
+		ptrs := make([]*repository.MediaObject, len(batch))
+		for i := range batch {
+			ptrs[i] = &batch[i]
+		}
+		if err := s.storageCleanup.ScheduleDeletions(ctx, ptrs); err != nil {
+			return err
+		}
+		afterID = batch[len(batch)-1].ID
+		if len(batch) < subtreeDeletionBatch {
+			return nil
+		}
+	}
 }
 
 // Exported for upload service

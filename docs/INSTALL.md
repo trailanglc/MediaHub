@@ -9,7 +9,7 @@ Hướng dẫn môi trường dev / self-host. Xem [README.md](../README.md) đ�
 | Go | 1.22+ |
 | Node.js + pnpm | Khuyến nghị LTS + pnpm 9+ |
 | Docker & Docker Compose | Cho Postgres, MinIO, Redis |
-| FFmpeg | Chỉ khi bật worker convert video (tùy chọn, chưa bắt buộc) |
+| FFmpeg + FFprobe | Bắt buộc khi chạy `make worker` (chuyển mã HLS) |
 
 ## 1. Cấu hình môi trường
 
@@ -44,17 +44,38 @@ make migrate-up
 
 ## 4. Chạy ứng dụng
 
-Cần **hai process** backend trong dev (API + scheduler):
+### Một lệnh (khuyến nghị)
+
+```bash
+make dev-full
+```
+
+Lệnh này: bật Docker (Postgres, MinIO, Redis) → migrate → chạy **một terminal** gồm API, scheduler, worker và frontend. Dừng bằng **Ctrl+C**.
+
+Nếu infra đã chạy sẵn:
+
+```bash
+make dev-all
+```
+
+Tùy chọn bỏ worker (không cần FFmpeg / không dùng Videos):
+
+```bash
+SKIP_WORKER=1 make dev-all
+```
+
+### Nhiều terminal (tùy chọn)
 
 | Terminal | Lệnh | Mô tả |
 |----------|------|--------|
 | 1 | `make api` | HTTP API — http://localhost:8080 |
 | 2 | `make scheduler` | Job nền: upload hết hạn, xóa S3, purge thùng rác, … |
-| 3 | `cd frontend && pnpm install && pnpm dev` | UI — http://localhost:3000 |
+| 3 | `make worker` | Chuyển mã HLS (Asynq + FFmpeg) — bắt buộc khi dùng Videos |
+| 4 | `make fe` | UI — http://localhost:3000 |
 
-Hoặc sau `make dev` (infra + migrate), tự mở thêm `make api`, `make scheduler`, `make fe`.
+`make dev` chỉ bật infra + migrate; sau đó dùng `make dev-all` hoặc các lệnh riêng ở trên.
 
-`make worker` — queue video convert (asynq), **chưa cần** nếu chưa dùng Video Manager.
+Biến môi trường video (xem `backend/.env.example`): `STREAM_SIGNING_SECRET`, `API_PUBLIC_URL` (URL API cho link HLS, mặc định `http://localhost:8080`), `CONVERT_MAX_CONCURRENT`, `CONVERT_JOB_TIMEOUT`, `STREAM_RATE_LIMIT_PER_MIN`.
 
 ## 5. Owner lần đầu
 

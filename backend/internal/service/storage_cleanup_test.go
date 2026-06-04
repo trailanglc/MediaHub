@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/anhtuanlc/mediahub/internal/config"
-	"github.com/anhtuanlc/mediahub/internal/platform"
+	"github.com/anhtuanlc/mediahub/internal/platform/postgres"
 	"github.com/anhtuanlc/mediahub/internal/repository"
 	"github.com/anhtuanlc/mediahub/internal/service"
 	"github.com/joho/godotenv"
@@ -28,7 +28,7 @@ func TestStorageDeletionJobEnqueue(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	pool, err := platform.NewPostgresPool(ctx, dsn)
+	pool, err := postgres.NewPool(ctx, dsn)
 	if err != nil {
 		t.Skipf("postgres: %v", err)
 	}
@@ -45,7 +45,7 @@ func TestStorageDeletionJobEnqueue(t *testing.T) {
 	}
 
 	repo := repository.NewStorageDeletionRepository(pool)
-	_ = service.NewStorageCleanupService(repo, nil)
+	_ = service.NewStorageCleanupService(repo, nil, nil)
 
 	if err := repo.Enqueue(ctx, 1, "temp/test-key", false); err != nil {
 		t.Fatalf("enqueue: %v", err)

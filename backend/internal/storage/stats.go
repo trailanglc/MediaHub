@@ -89,6 +89,8 @@ func (s *S3Storage) statsViaMadmin(ctx context.Context) (*StorageStats, error) {
 	return stats, nil
 }
 
+const listStatsFallbackMaxObjects = 50_000
+
 func (s *S3Storage) statsViaListObjects(ctx context.Context) (*StorageStats, error) {
 	stats := &StorageStats{Bucket: s.bucket}
 	if s.quotaBytes > 0 {
@@ -112,6 +114,9 @@ func (s *S3Storage) statsViaListObjects(ctx context.Context) (*StorageStats, err
 				stats.UsedBytes += *obj.Size
 			}
 			stats.ObjectCount++
+			if stats.ObjectCount >= listStatsFallbackMaxObjects {
+				return stats, nil
+			}
 		}
 		if !aws.ToBool(out.IsTruncated) {
 			break
@@ -153,6 +158,10 @@ func StatsDetails(stats *StorageStats, cachedAt time.Time, cacheTTL time.Duratio
 		d["total_bytes"] = strconv.FormatInt(stats.TotalBytes, 10)
 		d["free_bytes"] = strconv.FormatInt(stats.FreeBytes, 10)
 		d["used_percent"] = fmt.Sprintf("%.2f", stats.UsedPercent())
+	}
+	if stats.ObjectCount >= listStatsFallbackMaxObjects {
+		d["stats_partial"] = "true"
+		d["stats_note"] = fmt.Sprintf("list fallback capped at %d objects", listStatsFallbackMaxObjects)
 	}
 	if !cachedAt.IsZero() && cacheTTL > 0 {
 		d["stats_cached_at"] = cachedAt.UTC().Format(time.RFC3339)

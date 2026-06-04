@@ -96,10 +96,6 @@ func (s *MaintenanceService) CleanupOrphans(ctx context.Context, in CleanupOrpha
 		prefixes = []string{storage.PrefixThumbnails, storage.PrefixHLS, storage.PrefixOriginals}
 	}
 
-	refs, err := s.objects.ListReferencedStorageKeys(ctx)
-	if err != nil {
-		return nil, err
-	}
 	publicIDs, err := s.objects.ListKnownPublicIDs(ctx)
 	if err != nil {
 		return nil, err
@@ -108,47 +104,58 @@ func (s *MaintenanceService) CleanupOrphans(ctx context.Context, in CleanupOrpha
 	if err != nil {
 		return nil, err
 	}
+	guardKeySet := make(map[string]struct{}, len(guardKeys))
 	for _, k := range guardKeys {
-		refs[k] = struct{}{}
+		guardKeySet[k] = struct{}{}
 	}
 
 	res := &CleanupOrphansResult{DryRun: in.DryRun}
-	var orphans []string
 
 	for _, prefix := range prefixes {
-		keys, err := s3.ListObjectKeys(ctx, prefix)
-		if err != nil {
-			return nil, err
-		}
-		res.Scanned += len(keys)
-		for _, key := range keys {
-			if isProtectedStorageKey(key, refs, guardPrefixes, publicIDs) {
-				continue
+		err := s3.ForEachObjectKeyPage(ctx, prefix, 1000, func(page []string) error {
+			refs, err := s.objects.ReferencedStorageKeysAmong(ctx, page)
+			if err != nil {
+				return err
 			}
-			orphans = append(orphans, key)
+			for _, key := range page {
+				res.Scanned++
+				if isProtectedStorageKey(key, refs, guardPrefixes, publicIDs) {
+					continue
+				}
+				if _, guarded := guardKeySet[key]; guarded {
+					continue
+				}
+				res.OrphanCount++
+				if len(res.SampleKeys) < 20 {
+					res.SampleKeys = append(res.SampleKeys, key)
+				}
+				if in.DryRun {
+					if res.OrphanCount > maxDelete {
+						res.Truncated = true
+					}
+					continue
+				}
+				if res.Deleted >= maxDelete {
+					res.Truncated = true
+					continue
+				}
+				if err := s.store.DeleteObject(ctx, key); err != nil {
+					return fmt.Errorf("delete orphan %s: %w", key, err)
+				}
+				res.Deleted++
+			}
+			return nil
+		})
+		if err != nil {
+			return res, err
+		}
+		if res.Truncated && !in.DryRun {
+			break
 		}
 	}
 
-	res.OrphanCount = len(orphans)
-	if len(orphans) > maxDelete {
+	if in.DryRun && res.OrphanCount > maxDelete {
 		res.Truncated = true
-		orphans = orphans[:maxDelete]
-	}
-	if len(orphans) > 20 {
-		res.SampleKeys = append([]string(nil), orphans[:20]...)
-	} else {
-		res.SampleKeys = orphans
-	}
-
-	if in.DryRun {
-		return res, nil
-	}
-
-	for _, key := range orphans {
-		if err := s.store.DeleteObject(ctx, key); err != nil {
-			return res, fmt.Errorf("delete orphan %s: %w", key, err)
-		}
-		res.Deleted++
 	}
 	return res, nil
 }

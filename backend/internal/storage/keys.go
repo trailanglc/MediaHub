@@ -35,3 +35,18 @@ func UploadChunkKey(prefix string, index int) string {
 func ThumbnailObjectKey(publicID uuid.UUID) string {
 	return fmt.Sprintf("%s%s.jpg", PrefixThumbnails, publicID.String())
 }
+
+// HLSPrefix returns the storage prefix for all HLS output of a video.
+func HLSPrefix(videoPublicID uuid.UUID) string {
+	return fmt.Sprintf("%s%s/", PrefixHLS, videoPublicID.String())
+}
+
+// HLSMasterKey returns the master playlist object key.
+func HLSMasterKey(videoPublicID uuid.UUID) string {
+	return fmt.Sprintf("%smaster.m3u8", HLSPrefix(videoPublicID))
+}
+
+// HLSVariantPlaylistKey returns a variant playlist key (e.g. 720p/index.m3u8).
+func HLSVariantPlaylistKey(videoPublicID uuid.UUID, quality string) string {
+	return fmt.Sprintf("%s%s/index.m3u8", HLSPrefix(videoPublicID), quality)
+}

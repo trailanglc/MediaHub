@@ -8,7 +8,7 @@ import (
 
 	"github.com/anhtuanlc/mediahub/internal/auth"
 	"github.com/anhtuanlc/mediahub/internal/config"
-	"github.com/anhtuanlc/mediahub/internal/platform"
+	"github.com/anhtuanlc/mediahub/internal/platform/session"
 	"github.com/anhtuanlc/mediahub/internal/repository"
 	"github.com/google/uuid"
 )
@@ -39,8 +39,8 @@ type AuthService struct {
 	refresh   *repository.RefreshTokenRepository
 	audit     *repository.AuditRepository
 	issuer    *auth.TokenIssuer
-	revoke    *platform.TokenRevocation
-	ratelimit *platform.LoginRateLimiter
+	revoke    *session.TokenRevocation
+	ratelimit *session.LoginRateLimiter
 	cfg       *config.Config
 }
 
@@ -48,8 +48,8 @@ func NewAuthService(
 	users *repository.UserRepository,
 	refresh *repository.RefreshTokenRepository,
 	audit *repository.AuditRepository,
-	revoke *platform.TokenRevocation,
-	ratelimit *platform.LoginRateLimiter,
+	revoke *session.TokenRevocation,
+	ratelimit *session.LoginRateLimiter,
 	cfg *config.Config,
 ) *AuthService {
 	secret := cfg.JWTSecret
@@ -72,7 +72,7 @@ func (s *AuthService) Issuer() *auth.TokenIssuer {
 }
 
 func (s *AuthService) CookieSecure() bool {
-	return s.cfg.AppEnv == "production"
+	return s.cfg.AppEnv == "production" || s.cfg.AppEnv == "staging"
 }
 
 func (s *AuthService) AccessTTL() time.Duration {

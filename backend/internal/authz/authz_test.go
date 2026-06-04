@@ -7,7 +7,7 @@ import (
 
 	"github.com/anhtuanlc/mediahub/internal/auth"
 	"github.com/anhtuanlc/mediahub/internal/authz"
-	"github.com/anhtuanlc/mediahub/internal/platform"
+	"github.com/anhtuanlc/mediahub/internal/platform/postgres"
 	"github.com/anhtuanlc/mediahub/internal/repository"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -19,7 +19,7 @@ func testPool(t *testing.T) *pgxpool.Pool {
 	if dsn == "" {
 		dsn = "postgres://mediahub:Anhtuanlc.12@localhost:5432/mediahub?sslmode=disable"
 	}
-	pool, err := platform.NewPostgresPool(context.Background(), dsn)
+	pool, err := postgres.NewPool(context.Background(), dsn)
 	if err != nil {
 		t.Skipf("postgres not available: %v", err)
 	}

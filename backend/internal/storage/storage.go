@@ -9,6 +9,10 @@ import (
 type ObjectStorage interface {
 	PutObject(ctx context.Context, key string, body io.Reader, size int64, contentType string) error
 	GetObject(ctx context.Context, key string) (io.ReadCloser, error)
+	// StatObject returns size and metadata without downloading the body.
+	StatObject(ctx context.Context, key string) (*ObjectInfo, error)
+	// GetObjectRange reads [offset, offset+length); length < 0 means to end of object.
+	GetObjectRange(ctx context.Context, key string, offset, length int64) (io.ReadCloser, *ObjectInfo, error)
 	DeleteObject(ctx context.Context, key string) error
 	Exists(ctx context.Context, key string) (bool, error)
 	PresignGetObject(ctx context.Context, key string, ttl time.Duration) (string, error)

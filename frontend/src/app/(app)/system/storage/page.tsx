@@ -1,10 +1,10 @@
 import { OwnerGuard } from "@/components/layout/owner-guard";
-import { StorageScaffold } from "@/components/admin/feature-scaffold";
+import { SystemStoragePanel } from "@/components/system/system-storage-panel";
 
 export default function StoragePage() {
   return (
     <OwnerGuard>
-      <StorageScaffold />
+      <SystemStoragePanel />
     </OwnerGuard>
   );
 }

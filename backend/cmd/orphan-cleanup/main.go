@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/anhtuanlc/mediahub/internal/config"
-	"github.com/anhtuanlc/mediahub/internal/platform"
+	"github.com/anhtuanlc/mediahub/internal/platform/postgres"
 	"github.com/anhtuanlc/mediahub/internal/repository"
 	"github.com/anhtuanlc/mediahub/internal/service"
 	"github.com/anhtuanlc/mediahub/internal/storage"
@@ -39,7 +39,7 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
 
-	pool, err := platform.NewPostgresPool(ctx, cfg.DBDSN)
+	pool, err := postgres.NewPool(ctx, cfg.DBDSN)
 	if err != nil {
 		log.Fatalf("postgres: %v", err)
 	}
@@ -53,7 +53,7 @@ func main() {
 	objects := repository.NewMediaObjectRepository(pool)
 	deletionJobs := repository.NewStorageDeletionRepository(pool)
 	uploadSessions := repository.NewUploadSessionRepository(pool)
-	cleanup := service.NewStorageCleanupService(deletionJobs, store)
+	cleanup := service.NewStorageCleanupService(deletionJobs, store, nil)
 	maintenance := service.NewMaintenanceService(cleanup, nil, objects, deletionJobs, uploadSessions, store, nil)
 
 	in := service.CleanupOrphansInput{

@@ -15,7 +15,12 @@ import (
 	"github.com/anhtuanlc/mediahub/internal/config"
 	"github.com/anhtuanlc/mediahub/internal/handler"
 	"github.com/anhtuanlc/mediahub/internal/middleware"
-	"github.com/anhtuanlc/mediahub/internal/platform"
+	"github.com/anhtuanlc/mediahub/internal/observability"
+	"github.com/anhtuanlc/mediahub/internal/platform/cache"
+	"github.com/anhtuanlc/mediahub/internal/platform/postgres"
+	"github.com/anhtuanlc/mediahub/internal/platform/rediscache"
+	platredis "github.com/anhtuanlc/mediahub/internal/platform/redis"
+	"github.com/anhtuanlc/mediahub/internal/platform/session"
 	"github.com/anhtuanlc/mediahub/internal/repository"
 	"github.com/anhtuanlc/mediahub/internal/service"
 	"github.com/anhtuanlc/mediahub/internal/storage"
@@ -33,7 +38,7 @@ type securityEnv struct {
 	Auth   *service.AuthService
 	Issuer *auth.TokenIssuer
 	Users  *repository.UserRepository
-	Revoke *platform.TokenRevocation
+	Revoke *session.TokenRevocation
 }
 
 func newSecurityEnv(t *testing.T) *securityEnv {
@@ -44,7 +49,7 @@ func newSecurityEnv(t *testing.T) *securityEnv {
 	if dsn == "" {
 		dsn = "postgres://mediahub:Anhtuanlc.12@localhost:5432/mediahub?sslmode=disable"
 	}
-	pool, err := platform.NewPostgresPool(context.Background(), dsn)
+	pool, err := postgres.NewPool(context.Background(), dsn)
 	if err != nil {
 		t.Skipf("postgres not available: %v", err)
 	}
@@ -53,7 +58,7 @@ func newSecurityEnv(t *testing.T) *securityEnv {
 	if redisAddr == "" {
 		redisAddr = "localhost:6379"
 	}
-	rdb := platform.NewRedisClient(redisAddr)
+	rdb := platredis.NewClient(redisAddr)
 	if err := rdb.Ping(context.Background()).Err(); err != nil {
 		pool.Close()
 		t.Skipf("redis not available: %v", err)
@@ -78,17 +83,19 @@ func newSecurityEnv(t *testing.T) *securityEnv {
 	mediaRepo := repository.NewMediaObjectRepository(pool)
 	settingsRepo := repository.NewSettingsRepository(pool)
 
-	tokenRevoke := platform.NewTokenRevocation(rdb)
-	sessionInvalidate := platform.NewSessionInvalidation(rdb)
-	loginLimiter := platform.NewLoginRateLimiter(rdb, cfg.LoginMaxAttempts, cfg.LoginLockoutWindow)
+	tokenRevoke := session.NewTokenRevocation(rdb)
+	sessionInvalidate := session.NewSessionInvalidation(rdb, cfg.JWTRefreshTTL)
+	loginLimiter := session.NewLoginRateLimiter(rdb, cfg.LoginMaxAttempts, cfg.LoginLockoutWindow, cfg.RedisFailClosed)
+	redisCache := rediscache.NewStore(rdb)
 
 	authSvc := service.NewAuthService(userRepo, refreshRepo, auditRepo, tokenRevoke, loginLimiter, cfg)
-	memberSvc := service.NewMemberService(userRepo, permRepo, refreshRepo, auditRepo, sessionInvalidate)
+	memberSvc := service.NewMemberService(userRepo, permRepo, refreshRepo, auditRepo, sessionInvalidate, redisCache)
 	permSvc := service.NewPermissionService(permRepo, userRepo, mediaRepo, auditRepo)
-	settingsSvc := service.NewSettingsService(settingsRepo, auditRepo, cfg)
+	settingsSvc := service.NewSettingsService(settingsRepo, auditRepo, cfg, redisCache)
 	setupSvc := service.NewSetupService(userRepo, cfg)
 
-	authMW := middleware.NewAuthMiddleware(authSvc.Issuer(), tokenRevoke, sessionInvalidate, userRepo)
+	authUserCache := &rediscache.AuthUserCache{Store: redisCache, Users: userRepo}
+	authMW := middleware.NewAuthMiddleware(authSvc.Issuer(), tokenRevoke, sessionInvalidate, userRepo, authUserCache)
 
 	logger := zap.NewNop()
 	store, _ := storage.NewS3Storage(context.Background(), cfg.Storage, cfg.HealthMetricsCacheTTL)
@@ -107,13 +114,14 @@ func newSecurityEnv(t *testing.T) *securityEnv {
 		Redis:           rdb,
 		Storage:         store,
 		MetricsCacheTTL: cfg.HealthMetricsCacheTTL,
-		HostCache:       platform.NewTTLCache[*platform.HostStats](cfg.HealthMetricsCacheTTL),
+		HostCache:       cache.NewTTLCache[*observability.HostStats](cfg.HealthMetricsCacheTTL),
 	}
 
 	router := handler.NewRouter(handler.RouterDeps{
-		Logger:   logger,
-		Health:   health,
-		System:   handler.NewSystemHandler(nil),
+		Logger:         logger,
+		Health:         health,
+		System:         handler.NewSystemHandler(nil),
+		TrustedProxies: cfg.TrustedProxies,
 		Setup:    handler.NewSetupHandler(setupSvc, passwordTransport),
 		Auth:     handler.NewAuthHandler(authSvc, passwordTransport),
 		Member:   handler.NewMemberHandler(memberSvc, passwordTransport),

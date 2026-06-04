@@ -1,4 +1,4 @@
-import { VideoDetailScaffold } from "@/components/admin/feature-scaffold";
+import { VideoDetail } from "@/components/videos/video-detail";
 
 export default async function VideoDetailPage({
   params,
@@ -6,5 +6,5 @@ export default async function VideoDetailPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  return <VideoDetailScaffold id={id} />;
+  return <VideoDetail id={id} />;
 }

@@ -9,7 +9,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/anhtuanlc/mediahub/internal/platform"
+	"github.com/anhtuanlc/mediahub/internal/observability"
+	"github.com/anhtuanlc/mediahub/internal/platform/resource"
+	"github.com/anhtuanlc/mediahub/internal/platform/cache"
+	"github.com/anhtuanlc/mediahub/internal/platform/upload"
 	"github.com/anhtuanlc/mediahub/internal/storage"
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -23,7 +26,8 @@ type HealthHandler struct {
 	Redis           *redis.Client
 	Storage         storage.ObjectStorage
 	MetricsCacheTTL time.Duration
-	HostCache       *platform.TTLCache[*platform.HostStats]
+	HostCache       *cache.TTLCache[*observability.HostStats]
+	Resources       *resource.Reader
 }
 
 type componentHealth struct {
@@ -41,7 +45,8 @@ type systemHealthResponse struct {
 	MetricsCacheTTLSeconds  int                        `json:"metrics_cache_ttl_seconds,omitempty"`
 	MetricsCachedAt         *time.Time                 `json:"metrics_cached_at,omitempty"`
 	UploadMetrics           map[string]uint64          `json:"upload_metrics,omitempty"`
-	Host                    *platform.HostStats        `json:"host,omitempty"`
+	Host                    *observability.HostStats   `json:"host,omitempty"`
+	ResourceLimits          *resource.Limits           `json:"resource_limits,omitempty"`
 	Components              map[string]componentHealth `json:"components"`
 }
 
@@ -50,6 +55,13 @@ func (h *HealthHandler) SystemHealth(c *gin.Context) {
 	defer cancel()
 
 	hostStats, _ := h.cachedHostStats(ctx)
+
+	var resLimits *resource.Limits
+	if h.Resources != nil && h.Resources.Enabled {
+		if _, lim, err := h.Resources.Current(ctx); err == nil {
+			resLimits = &lim
+		}
+	}
 
 	var metricsCachedAt *time.Time
 	if h.HostCache != nil {
@@ -63,7 +75,7 @@ func (h *HealthHandler) SystemHealth(c *gin.Context) {
 		"database": h.checkDB(ctx),
 		"redis":    h.checkRedis(ctx),
 		"storage":  h.checkStorage(ctx),
-		"worker":   {Status: "unknown", Details: map[string]string{"note": "worker heartbeat not configured"}},
+		"worker":   h.checkWorker(ctx),
 		"ffmpeg":   h.checkFFmpeg(),
 	}
 
@@ -91,17 +103,18 @@ func (h *HealthHandler) SystemHealth(c *gin.Context) {
 		NumGoroutine:           runtime.NumGoroutine(),
 		MetricsCacheTTLSeconds: ttlSec,
 		MetricsCachedAt:        metricsCachedAt,
-		UploadMetrics:          platform.Upload.Snapshot(),
+		UploadMetrics:          upload.Default.Snapshot(),
 		Host:                   hostStats,
+		ResourceLimits:         resLimits,
 		Components:             components,
 	})
 }
 
-func (h *HealthHandler) cachedHostStats(ctx context.Context) (*platform.HostStats, error) {
+func (h *HealthHandler) cachedHostStats(ctx context.Context) (*observability.HostStats, error) {
 	if h.HostCache == nil {
-		return platform.CollectHostStats(ctx)
+		return observability.CollectHostStats(ctx)
 	}
-	return h.HostCache.GetOrCompute(ctx, platform.CollectHostStats)
+	return h.HostCache.GetOrCompute(ctx, observability.CollectHostStats)
 }
 
 func (h *HealthHandler) checkDB(ctx context.Context) componentHealth {
@@ -181,6 +194,13 @@ func (h *HealthHandler) checkStorage(ctx context.Context) componentHealth {
 		Status:  "healthy",
 		Details: storage.StatsDetails(stats, cachedAt, cacheTTL),
 	}
+}
+
+func (h *HealthHandler) checkWorker(ctx context.Context) componentHealth {
+	if h.Redis == nil {
+		return componentHealth{Status: "unknown", Details: map[string]string{"note": "redis not configured"}}
+	}
+	return CheckWorkerHeartbeat(ctx, h.Redis)
 }
 
 func (h *HealthHandler) checkFFmpeg() componentHealth {

@@ -98,3 +98,32 @@ func (r *RefreshTokenRepository) RevokeFamily(ctx context.Context, familyID uuid
 	}
 	return nil
 }
+
+// DeleteStale removes expired or long-revoked refresh tokens in batches.
+func (r *RefreshTokenRepository) DeleteStale(ctx context.Context, revokedBefore time.Time, batchSize int) (int64, error) {
+	if batchSize <= 0 {
+		batchSize = 1000
+	}
+	var total int64
+	for {
+		tag, err := r.pool.Exec(ctx, `
+			DELETE FROM refresh_tokens
+			WHERE id IN (
+				SELECT id FROM refresh_tokens
+				WHERE expires_at < now()
+				   OR (revoked_at IS NOT NULL AND revoked_at < $1)
+				ORDER BY id
+				LIMIT $2
+			)
+		`, revokedBefore, batchSize)
+		if err != nil {
+			return total, fmt.Errorf("delete stale refresh tokens: %w", err)
+		}
+		n := tag.RowsAffected()
+		total += n
+		if n < int64(batchSize) {
+			break
+		}
+	}
+	return total, nil
+}

@@ -244,3 +244,35 @@ func (r *StorageDeletionRepository) ListActiveDeletionGuards(ctx context.Context
 	}
 	return keys, prefixes, rows.Err()
 }
+
+// DeleteTerminalOlderThan removes done jobs and exhausted failed jobs before cutoff.
+func (r *StorageDeletionRepository) DeleteTerminalOlderThan(ctx context.Context, before time.Time, batchSize int) (int64, error) {
+	if batchSize <= 0 {
+		batchSize = 1000
+	}
+	var total int64
+	for {
+		tag, err := r.pool.Exec(ctx, `
+			DELETE FROM storage_deletion_jobs
+			WHERE id IN (
+				SELECT id FROM storage_deletion_jobs
+				WHERE (
+					status = 'done'
+					OR (status = 'failed' AND attempts >= $3)
+				)
+				  AND updated_at < $1
+				ORDER BY id
+				LIMIT $2
+			)
+		`, before, batchSize, maxDeletionAttempts)
+		if err != nil {
+			return total, err
+		}
+		n := tag.RowsAffected()
+		total += n
+		if n < int64(batchSize) {
+			break
+		}
+	}
+	return total, nil
+}

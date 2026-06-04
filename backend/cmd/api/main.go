@@ -14,7 +14,17 @@ import (
 	"github.com/anhtuanlc/mediahub/internal/config"
 	"github.com/anhtuanlc/mediahub/internal/handler"
 	"github.com/anhtuanlc/mediahub/internal/middleware"
+	"github.com/anhtuanlc/mediahub/internal/observability"
 	"github.com/anhtuanlc/mediahub/internal/platform"
+	"github.com/anhtuanlc/mediahub/internal/platform/cache"
+	"github.com/anhtuanlc/mediahub/internal/platform/postgres"
+	"github.com/anhtuanlc/mediahub/internal/platform/rediscache"
+	platredis "github.com/anhtuanlc/mediahub/internal/platform/redis"
+	"github.com/anhtuanlc/mediahub/internal/platform/session"
+	convertprogress "github.com/anhtuanlc/mediahub/internal/platform/convert"
+	streamplat "github.com/anhtuanlc/mediahub/internal/platform/stream"
+	"github.com/anhtuanlc/mediahub/internal/platform/resource"
+	"github.com/anhtuanlc/mediahub/internal/platform/upload"
 	"github.com/anhtuanlc/mediahub/internal/repository"
 	"github.com/anhtuanlc/mediahub/internal/service"
 	"github.com/anhtuanlc/mediahub/internal/storage"
@@ -38,7 +48,7 @@ func main() {
 
 	ctx := context.Background()
 
-	pool, err := platform.NewPostgresPool(ctx, cfg.DBDSN)
+	pool, err := postgres.NewPool(ctx, cfg.DBDSN)
 	if err != nil {
 		logger.Fatal("postgres", zap.Error(err))
 	}
@@ -68,7 +78,9 @@ func main() {
 		logger.Warn("upload_sessions table missing — run: make migrate-up (migration 000006)")
 	}
 
-	redisClient := platform.NewRedisClient(cfg.RedisAddr)
+	redisClient := platredis.NewClientFromConfig(cfg)
+	resReader := resource.NewReaderFromConfig(cfg, redisClient)
+	redisCache := rediscache.NewStore(redisClient).WithResources(resReader)
 
 	store, err := storage.NewS3Storage(ctx, cfg.Storage, cfg.HealthMetricsCacheTTL)
 	if err != nil {
@@ -86,32 +98,34 @@ func main() {
 	permRepo := repository.NewPermissionRepository(pool)
 	mediaRepo := repository.NewMediaObjectRepository(pool)
 
-	tokenRevoke := platform.NewTokenRevocation(redisClient)
-	sessionInvalidate := platform.NewSessionInvalidation(redisClient)
-	loginLimiter := platform.NewLoginRateLimiter(redisClient, cfg.LoginMaxAttempts, cfg.LoginLockoutWindow)
+	tokenRevoke := session.NewTokenRevocation(redisClient)
+	sessionInvalidate := session.NewSessionInvalidation(redisClient, cfg.JWTRefreshTTL)
+	loginLimiter := session.NewLoginRateLimiter(redisClient, cfg.LoginMaxAttempts, cfg.LoginLockoutWindow, cfg.RedisFailClosed)
 
 	authSvc := service.NewAuthService(userRepo, refreshRepo, auditRepo, tokenRevoke, loginLimiter, cfg)
-	memberSvc := service.NewMemberService(userRepo, permRepo, refreshRepo, auditRepo, sessionInvalidate)
+	memberSvc := service.NewMemberService(userRepo, permRepo, refreshRepo, auditRepo, sessionInvalidate, redisCache)
 	permSvc := service.NewPermissionService(permRepo, userRepo, mediaRepo, auditRepo)
 	settingsRepo := repository.NewSettingsRepository(pool)
-	settingsSvc := service.NewSettingsService(settingsRepo, auditRepo, cfg)
+	settingsSvc := service.NewSettingsService(settingsRepo, auditRepo, cfg, redisCache)
 	authzSvc := authz.NewService(permRepo)
 	uploadRepo := repository.NewUploadSessionRepository(pool)
 	deletionRepo := repository.NewStorageDeletionRepository(pool)
-	storageCleanup := service.NewStorageCleanupService(deletionRepo, store)
+	storageCleanup := service.NewStorageCleanupService(deletionRepo, store, resReader)
 	thumbnailSvc := service.NewThumbnailService(mediaRepo, store)
 	mediaSvc := service.NewMediaObjectService(mediaRepo, settingsSvc, authzSvc, auditRepo, store, storageCleanup, thumbnailSvc)
-	uploadLimiter := platform.NewUploadRateLimiter(redisClient, cfg.UploadInitPerMinute)
+	uploadLimiter := upload.NewRateLimiter(redisClient, cfg.UploadInitPerMinute)
 	uploadSvc := service.NewUploadService(uploadRepo, mediaSvc, pool, store, thumbnailSvc, uploadLimiter, cfg.MaxPendingUploadsPerUser)
 
-	authMW := middleware.NewAuthMiddleware(authSvc.Issuer(), tokenRevoke, sessionInvalidate, userRepo)
+	authUserCache := &rediscache.AuthUserCache{Store: redisCache, Users: userRepo}
+	authMW := middleware.NewAuthMiddleware(authSvc.Issuer(), tokenRevoke, sessionInvalidate, userRepo, authUserCache)
 
 	health := &handler.HealthHandler{
 		DB:              pool,
 		Redis:           redisClient,
 		Storage:         store,
 		MetricsCacheTTL: cfg.HealthMetricsCacheTTL,
-		HostCache:       platform.NewTTLCache[*platform.HostStats](cfg.HealthMetricsCacheTTL),
+		HostCache:       cache.NewTTLCache[*observability.HostStats](cfg.HealthMetricsCacheTTL),
+		Resources:       resReader,
 	}
 
 	passwordCipher, err := auth.NewPasswordCipher(cfg.LoginRSAPrivateKeyPEM)
@@ -129,10 +143,48 @@ func main() {
 	maintenanceSvc := service.NewMaintenanceService(storageCleanup, uploadSvc, mediaRepo, deletionRepo, uploadRepo, store, auditRepo)
 	systemHandler := handler.NewSystemHandler(maintenanceSvc)
 
-	router := handler.NewRouter(handler.RouterDeps{
-		Logger:   logger,
+	videoRepo := repository.NewVideoRepository(pool)
+	apiKeyRepo := repository.NewAPIKeyRepository(pool)
+	systemInfo := &handler.SystemInfoHandler{
 		Health:   health,
-		System:   systemHandler,
+		APIKeys:  apiKeyRepo,
+		Settings: settingsSvc,
+		Cfg:      cfg,
+	}
+	convertEnqueue := service.NewConvertEnqueue(cfg.RedisAddr)
+	defer convertEnqueue.Close() //nolint:errcheck
+	streamTok := service.NewStreamTokenService(cfg.StreamSigningSecret)
+	convertProg := convertprogress.NewProgressStore(redisClient)
+	videoSvc := service.NewVideoService(videoRepo, mediaRepo, authzSvc, auditRepo, settingsSvc, store, convertEnqueue, streamTok, cfg.APIPublicURL, convertProg, redisCache, resReader)
+	streamLoader := &rediscache.StreamLoader{
+		Store:         redisCache,
+		Videos:        videoRepo,
+		GlobalDomains: settingsSvc.GlobalAllowedDomains,
+	}
+	apiKeySvc := service.NewAPIKeyService(apiKeyRepo, auditRepo)
+	streamMetrics := streamplat.NewMetrics(redisClient)
+	streamLimiter := streamplat.NewRateLimiter(redisClient, cfg.StreamRateLimitPerMin, cfg.RedisFailClosed)
+
+	s3Store := store
+
+	queueHandler := handler.NewQueueHandler(videoRepo, mediaRepo, cfg.RedisAddr, streamMetrics)
+	defer queueHandler.Close() //nolint:errcheck
+
+	if cfg.AppEnv == "development" {
+		if cfg.JWTSecret == "" {
+			logger.Warn("JWT_SECRET unset — using insecure dev default; set secrets before production")
+		}
+		if cfg.StreamSigningSecret == "dev_stream_signing_secret" {
+			logger.Warn("STREAM_SIGNING_SECRET unset — using dev default")
+		}
+	}
+
+	router := handler.NewRouter(handler.RouterDeps{
+		Logger:     logger,
+		Health:     health,
+		SystemInfo: systemInfo,
+		System:     systemHandler,
+		Queue:    queueHandler,
 		Setup:    setupHandler,
 		Auth:     handler.NewAuthHandler(authSvc, passwordTransport),
 		Member:   handler.NewMemberHandler(memberSvc, passwordTransport),
@@ -140,10 +192,14 @@ func main() {
 		Settings: handler.NewSettingsHandler(settingsSvc, logger),
 		Objects:  handler.NewObjectHandler(mediaSvc),
 		Upload:   handler.NewUploadHandler(uploadSvc, logger),
+		Videos:   handler.NewVideoHandler(videoSvc, s3Store),
+		APIKeys:  handler.NewAPIKeyHandler(apiKeySvc),
+		Stream: handler.NewStreamHandler(streamLoader, streamTok, store, apiKeySvc, streamMetrics, streamLimiter, cfg.AppURL, cfg.AppEnv, authMW, authzSvc),
 		Password: passwordTransport,
 		AuthMW:   authMW,
-		AppURL:   cfg.AppURL,
-		AppEnv:   cfg.AppEnv,
+		AppURL:         cfg.AppURL,
+		AppEnv:         cfg.AppEnv,
+		TrustedProxies: cfg.TrustedProxies,
 	})
 
 	srv := &http.Server{

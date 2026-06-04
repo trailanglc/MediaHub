@@ -7,7 +7,8 @@ import (
 	"strings"
 
 	"github.com/anhtuanlc/mediahub/internal/auth"
-	"github.com/anhtuanlc/mediahub/internal/platform"
+	"github.com/anhtuanlc/mediahub/internal/platform/rediscache"
+	"github.com/anhtuanlc/mediahub/internal/platform/session"
 	"github.com/anhtuanlc/mediahub/internal/repository"
 	"github.com/google/uuid"
 )
@@ -24,7 +25,8 @@ type MemberService struct {
 	perms    *repository.PermissionRepository
 	refresh  *repository.RefreshTokenRepository
 	audit    *repository.AuditRepository
-	sessions *platform.SessionInvalidation
+	sessions *session.SessionInvalidation
+	cache    *rediscache.Store
 }
 
 func NewMemberService(
@@ -32,9 +34,14 @@ func NewMemberService(
 	perms *repository.PermissionRepository,
 	refresh *repository.RefreshTokenRepository,
 	audit *repository.AuditRepository,
-	sessions *platform.SessionInvalidation,
+	sessions *session.SessionInvalidation,
+	cache *rediscache.Store,
 ) *MemberService {
-	return &MemberService{users: users, perms: perms, refresh: refresh, audit: audit, sessions: sessions}
+	return &MemberService{users: users, perms: perms, refresh: refresh, audit: audit, sessions: sessions, cache: cache}
+}
+
+func (s *MemberService) invalidateUserCache(ctx context.Context, publicID uuid.UUID) {
+	rediscache.InvalidateAuthUser(ctx, s.cache, publicID)
 }
 
 type CreateMemberInput struct {
@@ -134,6 +141,7 @@ func (s *MemberService) Update(ctx context.Context, publicID uuid.UUID, p Update
 		if s.sessions != nil {
 			_ = s.sessions.InvalidateUser(ctx, u.ID)
 		}
+		s.invalidateUserCache(ctx, u.PublicID)
 	}
 	targetID := u.ID
 	_ = s.audit.Log(ctx, &actorID, "member.updated", "user", &targetID, ip, userAgent, nil)
@@ -157,6 +165,7 @@ func (s *MemberService) Disable(ctx context.Context, publicID uuid.UUID, actorID
 	if s.sessions != nil {
 		_ = s.sessions.InvalidateUser(ctx, u.ID)
 	}
+	s.invalidateUserCache(ctx, u.PublicID)
 	targetID := u.ID
 	_ = s.audit.Log(ctx, &actorID, "member.disabled", "user", &targetID, ip, userAgent, nil)
 	return nil
@@ -179,6 +188,7 @@ func (s *MemberService) Restore(ctx context.Context, publicID uuid.UUID, actorID
 	if err != nil {
 		return nil, err
 	}
+	s.invalidateUserCache(ctx, updated.PublicID)
 	targetID := updated.ID
 	_ = s.audit.Log(ctx, &actorID, "member.restored", "user", &targetID, ip, userAgent, nil)
 	return updated, nil
@@ -197,6 +207,7 @@ func (s *MemberService) Purge(ctx context.Context, publicID uuid.UUID, actorID i
 	if s.sessions != nil {
 		_ = s.sessions.InvalidateUser(ctx, u.ID)
 	}
+	s.invalidateUserCache(ctx, u.PublicID)
 	deleted, err := s.users.DeleteMember(ctx, publicID)
 	if err != nil {
 		return err

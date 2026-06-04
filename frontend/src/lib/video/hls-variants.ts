@@ -3,6 +3,7 @@ export const HLS_VARIANT_OPTIONS = [
   { id: "1080p", label: "1080p (Full HD)", height: 1080 },
   { id: "720p", label: "720p (HD)", height: 720 },
   { id: "480p", label: "480p (SD)", height: 480 },
+  { id: "360p", label: "360p (Tiết kiệm)", height: 360 },
 ] as const;
 
 export type HLSVariantId = (typeof HLS_VARIANT_OPTIONS)[number]["id"];

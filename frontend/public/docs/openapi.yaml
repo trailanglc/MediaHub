@@ -1,0 +1,492 @@
+openapi: 3.1.0
+info:
+  title: MediaHub API
+  version: 1.0.0
+  description: |
+    **Integration API** (`/api/v1`): authenticate with `X-API-Key`.
+    Scopes: `media:upload`, `media:read`, `media:convert`, `media:delete`, `stream`.
+
+    **Management API** (`/api/api-keys`): owner JWT session (browser cookie / Bearer access token).
+servers:
+  - url: http://localhost:8080
+    description: Local API
+security:
+  - ApiKeyAuth: []
+tags:
+  - name: Management
+  - name: Upload
+  - name: Media
+  - name: Convert
+  - name: Delivery
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Owner access token from login
+  schemas:
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+        message:
+          type: string
+    UploadInitRequest:
+      type: object
+      required: [file_name, size]
+      properties:
+        parent_id:
+          type: string
+          format: uuid
+          description: Folder under API key root (default = key root folder)
+        file_name:
+          type: string
+        size:
+          type: integer
+          format: int64
+        mime_type:
+          type: string
+        chunk_size:
+          type: integer
+        upload_mode:
+          type: string
+          enum: [multipart, direct]
+          default: multipart
+          description: |
+            `multipart` — upload chunks via API (default).
+            `direct` — presigned PUT to object storage, then POST complete.
+    UploadInitResponse:
+      type: object
+      properties:
+        session_public_id:
+          type: string
+          format: uuid
+        upload_mode:
+          type: string
+        chunk_size:
+          type: integer
+        total_chunks:
+          type: integer
+        put_url:
+          type: string
+          description: Present when upload_mode=direct
+        put_headers:
+          type: object
+          additionalProperties:
+            type: string
+        expires_at:
+          type: string
+          format: date-time
+        max_upload_bytes:
+          type: integer
+    MediaObject:
+      type: object
+      properties:
+        public_id:
+          type: string
+        type:
+          type: string
+        name:
+          type: string
+        mime_type:
+          type: string
+        size_bytes:
+          type: integer
+        hls_status:
+          type: string
+        delivery_urls:
+          type: object
+    ConvertJob:
+      type: object
+      properties:
+        public_id:
+          type: string
+        status:
+          type: string
+        attempts:
+          type: integer
+        max_attempts:
+          type: integer
+        error:
+          type: string
+    DeliveryURLsRequest:
+      type: object
+      required: [ids]
+      properties:
+        ids:
+          type: array
+          items:
+            type: string
+            format: uuid
+    APIKey:
+      type: object
+      properties:
+        public_id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        scopes:
+          type: array
+          items:
+            type: string
+        allowed_ips:
+          type: array
+          items:
+            type: string
+        root_folder_public_id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [active, revoked]
+        last_used_at:
+          type: string
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+    CreateAPIKeyRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+        scopes:
+          type: array
+          items:
+            type: string
+        allowed_ips:
+          type: array
+          items:
+            type: string
+        root_folder_public_id:
+          type: string
+          format: uuid
+    PatchAPIKeyRequest:
+      type: object
+      properties:
+        name:
+          type: string
+        scopes:
+          type: array
+          items:
+            type: string
+        allowed_ips:
+          type: array
+          items:
+            type: string
+        root_folder_public_id:
+          type: string
+          format: uuid
+        clear_root_folder:
+          type: boolean
+        status:
+          type: string
+          enum: [active, revoked]
+    CreateAPIKeyResponse:
+      type: object
+      properties:
+        key:
+          $ref: "#/components/schemas/APIKey"
+        secret:
+          type: string
+          description: Plaintext secret (shown once). Prefix `mh_`.
+paths:
+  /api/api-keys:
+    get:
+      tags: [Management]
+      summary: List API keys (owner)
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/APIKey"
+    post:
+      tags: [Management]
+      summary: Create API key (owner)
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateAPIKeyRequest"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CreateAPIKeyResponse"
+  /api/api-keys/{public_id}:
+    patch:
+      tags: [Management]
+      summary: Update API key (owner)
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: public_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PatchAPIKeyRequest"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/APIKey"
+    delete:
+      tags: [Management]
+      summary: Revoke API key (owner)
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: public_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Revoked
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+  /api/v1/media/upload/limits:
+    get:
+      tags: [Upload]
+      summary: Upload limits
+      security:
+        - ApiKeyAuth: []
+      responses:
+        "200":
+          description: OK
+  /api/v1/media/upload/init:
+    post:
+      tags: [Upload]
+      summary: Start upload session
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UploadInitRequest"
+      responses:
+        "201":
+          description: Session created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UploadInitResponse"
+  /api/v1/media/upload/{session_id}/chunks/{index}:
+    put:
+      tags: [Upload]
+      summary: Upload chunk (multipart mode only)
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: index
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+      responses:
+        "204":
+          description: Chunk stored
+  /api/v1/media/upload/{session_id}/complete:
+    post:
+      tags: [Upload]
+      summary: Finalize upload
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Media object created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MediaObject"
+  /api/v1/media/upload/{session_id}:
+    delete:
+      tags: [Upload]
+      summary: Abort upload
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "204":
+          description: Aborted
+  /api/v1/media/{public_id}:
+    get:
+      tags: [Media]
+      summary: Get media metadata + delivery URLs
+      parameters:
+        - name: public_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: OK
+    delete:
+      tags: [Media]
+      summary: Delete media
+      parameters:
+        - name: public_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "204":
+          description: Deleted
+  /api/v1/media/{public_id}/convert:
+    post:
+      tags: [Convert]
+      summary: Start HLS convert
+      parameters:
+        - name: public_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                variants:
+                  type: array
+                  items:
+                    type: string
+                    example: "720p"
+      responses:
+        "202":
+          description: Job accepted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  job:
+                    $ref: "#/components/schemas/ConvertJob"
+  /api/v1/media/{public_id}/convert/retry:
+    post:
+      tags: [Convert]
+      summary: Retry failed convert
+      parameters:
+        - name: public_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "202":
+          description: Retry job accepted
+  /api/v1/media/{public_id}/hls:
+    get:
+      tags: [Delivery]
+      summary: HLS access URLs
+      parameters:
+        - name: public_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: OK
+  /api/v1/media/delivery-urls:
+    post:
+      tags: [Delivery]
+      summary: Batch signed delivery URLs
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DeliveryURLsRequest"
+      responses:
+        "200":
+          description: URL map keyed by public_id
+  /oembed:
+    get:
+      tags: [Delivery]
+      summary: oEmbed discovery for video embed URLs
+      security: []
+      parameters:
+        - name: url
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uri
+        - name: maxwidth
+          in: query
+          schema:
+            type: integer
+        - name: maxheight
+          in: query
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: oEmbed 1.0 JSON

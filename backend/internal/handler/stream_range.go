@@ -2,6 +2,7 @@ package handler
 
 import (
 	"fmt"
+	"hash/fnv"
 	"net/http"
 	"strconv"
 	"strings"
@@ -76,4 +77,30 @@ func setImmutableCacheHeaders(h http.Header, etag string) {
 	if etag != "" {
 		h.Set("ETag", fmt.Sprintf(`"%s"`, etag))
 	}
+}
+
+// weakETag derives a stable, quoted validator from a response body (used for playlists).
+func weakETag(body []byte) string {
+	hsh := fnv.New64a()
+	_, _ = hsh.Write(body)
+	return fmt.Sprintf(`"%x"`, hsh.Sum64())
+}
+
+// etagMatches reports whether an If-None-Match header satisfies the given quoted ETag.
+func etagMatches(ifNoneMatch, etag string) bool {
+	ifNoneMatch = strings.TrimSpace(ifNoneMatch)
+	if ifNoneMatch == "" || etag == "" {
+		return false
+	}
+	if ifNoneMatch == "*" {
+		return true
+	}
+	for _, part := range strings.Split(ifNoneMatch, ",") {
+		candidate := strings.TrimSpace(part)
+		candidate = strings.TrimPrefix(candidate, "W/")
+		if candidate == etag {
+			return true
+		}
+	}
+	return false
 }

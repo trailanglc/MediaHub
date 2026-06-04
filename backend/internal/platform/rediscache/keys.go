@@ -3,10 +3,14 @@ package rediscache
 import "time"
 
 const (
-	PrefixAuthUser   = "cache:auth:user:"
+	PrefixAuthUser    = "cache:auth:user:"
 	PrefixStreamVideo = "cache:stream:video:"
 
 	KeySettingsV1 = "cache:settings:v1"
+
+	// ChannelStreamInvalidate broadcasts video public IDs whose cached stream data
+	// (including per-process playlist bodies) must be dropped across all replicas.
+	ChannelStreamInvalidate = "cache:stream:invalidate"
 
 	TTLAuthUser    = 60 * time.Second
 	TTLSettings    = 30 * time.Second

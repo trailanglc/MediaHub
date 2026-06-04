@@ -25,6 +25,8 @@ import (
 	streamplat "github.com/anhtuanlc/mediahub/internal/platform/stream"
 	"github.com/anhtuanlc/mediahub/internal/platform/resource"
 	"github.com/anhtuanlc/mediahub/internal/platform/upload"
+	"github.com/anhtuanlc/mediahub/internal/platform/webhook"
+	integrationquota "github.com/anhtuanlc/mediahub/internal/platform/integrationquota"
 	"github.com/anhtuanlc/mediahub/internal/repository"
 	"github.com/anhtuanlc/mediahub/internal/service"
 	"github.com/anhtuanlc/mediahub/internal/storage"
@@ -114,7 +116,13 @@ func main() {
 	thumbnailSvc := service.NewThumbnailService(mediaRepo, store)
 	mediaSvc := service.NewMediaObjectService(mediaRepo, settingsSvc, authzSvc, auditRepo, store, storageCleanup, thumbnailSvc)
 	uploadLimiter := upload.NewRateLimiter(redisClient, cfg.UploadInitPerMinute)
-	uploadSvc := service.NewUploadService(uploadRepo, mediaSvc, pool, store, thumbnailSvc, uploadLimiter, cfg.MaxPendingUploadsPerUser)
+	uploadSvc := service.NewUploadService(uploadRepo, mediaSvc, pool, store, thumbnailSvc, uploadLimiter, cfg.MaxPendingUploadsPerUser, cfg.PresignedPutURLTTL)
+
+	webhookRepo := repository.NewWebhookRepository(pool)
+	webhookDispatcher := webhook.NewDispatcher(webhookRepo, logger)
+	webhookSvc := service.NewWebhookService(webhookRepo)
+	uploadSvc.SetWebhooks(webhookDispatcher)
+	mediaSvc.SetWebhooks(webhookDispatcher)
 
 	authUserCache := &rediscache.AuthUserCache{Store: redisCache, Users: userRepo}
 	authMW := middleware.NewAuthMiddleware(authSvc.Issuer(), tokenRevoke, sessionInvalidate, userRepo, authUserCache)
@@ -156,14 +164,21 @@ func main() {
 	streamTok := service.NewStreamTokenService(cfg.StreamSigningSecret)
 	convertProg := convertprogress.NewProgressStore(redisClient)
 	videoSvc := service.NewVideoService(videoRepo, mediaRepo, authzSvc, auditRepo, settingsSvc, store, convertEnqueue, streamTok, cfg.APIPublicURL, convertProg, redisCache, resReader)
+	videoSvc.SetWebhooks(webhookDispatcher)
 	streamLoader := &rediscache.StreamLoader{
 		Store:         redisCache,
 		Videos:        videoRepo,
 		GlobalDomains: settingsSvc.GlobalAllowedDomains,
 	}
-	apiKeySvc := service.NewAPIKeyService(apiKeyRepo, auditRepo)
+	apiKeySvc := service.NewAPIKeyService(apiKeyRepo, auditRepo, mediaRepo)
+	deliveryBase := cfg.DeliveryBaseURL()
+	deliverySvc := service.NewDeliveryService(streamTok, deliveryBase, cfg.AssetDeliveryURLTTL)
+	imageTransform := service.NewImageTransformService(store, redisCache, cfg.ImageTransformCacheTTL)
+	integrationQuota := integrationquota.NewLimiter(redisClient, cfg.APIKeyUploadInitPerMin, cfg.APIKeyConvertPerHour)
+	integrationSvc := service.NewIntegrationService(mediaRepo, uploadSvc, mediaSvc, videoSvc, deliverySvc, integrationQuota)
 	streamMetrics := streamplat.NewMetrics(redisClient)
-	streamLimiter := streamplat.NewRateLimiter(redisClient, cfg.StreamRateLimitPerMin, cfg.RedisFailClosed)
+	streamLimiter := streamplat.NewRateLimiter(redisClient, cfg.StreamRateLimitPerMin, cfg.RedisFailClosed).
+		WithSegmentLimit(cfg.StreamSegmentRateLimitPerMin)
 
 	s3Store := store
 
@@ -194,7 +209,16 @@ func main() {
 		Upload:   handler.NewUploadHandler(uploadSvc, logger),
 		Videos:   handler.NewVideoHandler(videoSvc, s3Store),
 		APIKeys:  handler.NewAPIKeyHandler(apiKeySvc),
-		Stream: handler.NewStreamHandler(streamLoader, streamTok, store, apiKeySvc, streamMetrics, streamLimiter, cfg.AppURL, cfg.AppEnv, authMW, authzSvc),
+		Webhooks: handler.NewWebhookHandler(webhookSvc),
+		Integration: handler.NewIntegrationV1Handler(integrationSvc),
+		Assets:      handler.NewAssetDeliveryHandler(mediaRepo, videoSvc, deliverySvc, imageTransform, store),
+		Embed:       handler.NewEmbedHandler(videoRepo, deliverySvc, streamTok, deliveryBase),
+		OEmbed:      handler.NewOEmbedHandler(videoRepo, mediaRepo, deliverySvc, deliveryBase, cfg.AppURL, cfg.APIPublicURL),
+		APIKeySvc:   apiKeySvc,
+		Stream: handler.NewStreamHandler(streamLoader, streamTok, store, apiKeySvc, integrationSvc, streamMetrics, streamLimiter, cfg.AppURL, cfg.AppEnv, authMW, authzSvc, handler.StreamHandlerOptions{
+			SegmentURLWindow:       cfg.StreamSegmentURLTTL,
+			InternalRedirectPrefix: cfg.StreamInternalRedirectPrefix,
+		}),
 		Password: passwordTransport,
 		AuthMW:   authMW,
 		AppURL:         cfg.AppURL,

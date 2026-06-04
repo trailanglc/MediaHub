@@ -89,8 +89,17 @@ export function HlsPlayer({ src, className }: { src: string; className?: string 
         xhrSetup(xhr) {
           xhr.withCredentials = true;
         },
+        // Adaptive bitrate tuned for fast start + smooth scaling:
+        // start at the ABR-estimated level, never load a rendition larger than the
+        // on-screen player, and keep buffers modest so time-to-first-frame stays low
+        // while still surviving short network stalls.
+        startLevel: -1,
+        capLevelToPlayerSize: true,
+        abrEwmaDefaultEstimate: 1_000_000,
+        startFragPrefetch: true,
         maxBufferLength: 30,
         maxMaxBufferLength: 60,
+        backBufferLength: 30,
       });
       hlsRef.current = hls;
 

@@ -571,6 +571,14 @@ export function SettingsPanel() {
               </Button>
               <Button
                 nativeButton={false}
+                render={<Link href="/docs/integration" />}
+                variant="outline"
+                size="sm"
+              >
+                Tài liệu API
+              </Button>
+              <Button
+                nativeButton={false}
                 render={<Link href="/system/health" />}
                 variant="outline"
                 size="sm"

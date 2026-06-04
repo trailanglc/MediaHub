@@ -18,15 +18,19 @@ type HLSVariant struct {
 
 // SourceProfile describes input quality from probe / DB (0 = unknown).
 type SourceProfile struct {
+	Width   int
 	Height  int
-	Bitrate int64 // bits per second (container/video stream)
+	Bitrate int64   // bits per second (container/video stream)
+	FPS     float64 // frames per second (0 = unknown -> assume 30)
 }
 
 // KnownVariants lists renditions the platform supports (highest first).
+// 360p is included so weak networks / fast start have a lightweight rendition to begin on.
 var KnownVariants = []HLSVariant{
 	{Name: "1080p", Height: 1080, Bitrate: "5000k", TargetBps: 5_000_000},
 	{Name: "720p", Height: 720, Bitrate: "2800k", TargetBps: 2_800_000},
 	{Name: "480p", Height: 480, Bitrate: "1400k", TargetBps: 1_400_000},
+	{Name: "360p", Height: 360, Bitrate: "800k", TargetBps: 800_000},
 }
 
 const sourceHeightSlack = 16

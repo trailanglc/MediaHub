@@ -84,6 +84,7 @@ func (m *Metrics) AnalyticsSnapshot(ctx context.Context) (map[string]int64, erro
 type RateLimiter struct {
 	redis      *redis.Client
 	perMin     int
+	segPerMin  int
 	failClosed bool
 }
 
@@ -91,7 +92,15 @@ func NewRateLimiter(r *redis.Client, perMin int, failClosed bool) *RateLimiter {
 	if perMin <= 0 {
 		perMin = 120
 	}
-	return &RateLimiter{redis: r, perMin: perMin, failClosed: failClosed}
+	return &RateLimiter{redis: r, perMin: perMin, segPerMin: perMin * 10, failClosed: failClosed}
+}
+
+// WithSegmentLimit overrides the per-minute segment budget (0 keeps the default 10x playlist limit).
+func (l *RateLimiter) WithSegmentLimit(perMin int) *RateLimiter {
+	if l != nil && perMin > 0 {
+		l.segPerMin = perMin
+	}
+	return l
 }
 
 func (l *RateLimiter) Allow(ctx context.Context, ip, videoID string) (bool, error) {
@@ -110,4 +119,22 @@ func (l *RateLimiter) Allow(ctx context.Context, ip, videoID string) (bool, erro
 		_ = l.redis.Expire(ctx, key, 2*time.Minute).Err()
 	}
 	return n <= int64(l.perMin), nil
+}
+
+// AllowSegment limits origin segment fetches per IP/video/minute. It fails open on Redis
+// errors so a transient cache blip never interrupts playback (segments are the hot path and
+// are normally absorbed by the edge cache; this only guards origin during cache misses).
+func (l *RateLimiter) AllowSegment(ctx context.Context, ip, videoID string) bool {
+	if l == nil || l.redis == nil {
+		return true
+	}
+	key := fmt.Sprintf("stream:rls:%s:%s:%d", ip, videoID, time.Now().Unix()/60)
+	n, err := l.redis.Incr(ctx, key).Result()
+	if err != nil {
+		return true
+	}
+	if n == 1 {
+		_ = l.redis.Expire(ctx, key, 2*time.Minute).Err()
+	}
+	return n <= int64(l.segPerMin)
 }

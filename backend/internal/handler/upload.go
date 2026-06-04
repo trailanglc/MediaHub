@@ -32,6 +32,7 @@ type initUploadRequest struct {
 	Size      int64  `json:"size" binding:"required"`
 	MimeType  string `json:"mime_type"`
 	ChunkSize int    `json:"chunk_size"`
+	Mode      string `json:"upload_mode"`
 }
 
 func (h *UploadHandler) Limits(c *gin.Context) {
@@ -67,6 +68,7 @@ func (h *UploadHandler) Init(c *gin.Context) {
 		Size:           req.Size,
 		MimeType:       req.MimeType,
 		ChunkSize:      req.ChunkSize,
+		Mode:           req.Mode,
 	})
 	if err != nil {
 		writeUploadError(c, h.logger, "upload init", err)

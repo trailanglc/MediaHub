@@ -9,6 +9,7 @@ import (
 
 	"github.com/anhtuanlc/mediahub/internal/authz"
 	"github.com/anhtuanlc/mediahub/internal/mediautil"
+	"github.com/anhtuanlc/mediahub/internal/platform/webhook"
 	"github.com/anhtuanlc/mediahub/internal/repository"
 	"github.com/anhtuanlc/mediahub/internal/storage"
 	"github.com/google/uuid"
@@ -71,6 +72,7 @@ type MediaObjectService struct {
 	store          storage.ObjectStorage
 	storageCleanup *StorageCleanupService
 	thumbnails     *ThumbnailService
+	webhooks       *webhook.Dispatcher
 }
 
 func NewMediaObjectService(
@@ -91,6 +93,10 @@ func NewMediaObjectService(
 		storageCleanup: storageCleanup,
 		thumbnails:     thumbnails,
 	}
+}
+
+func (s *MediaObjectService) SetWebhooks(d *webhook.Dispatcher) {
+	s.webhooks = d
 }
 
 type ListObjectsInput struct {
@@ -967,6 +973,14 @@ func (s *MediaObjectService) Delete(ctx context.Context, userID int64, role stri
 		"deleted_count": fmt.Sprintf("%d", deletedCount),
 	}
 	_ = s.audit.Log(ctx, &userID, "object.delete", m.Type, &tid, ip, ua, meta)
+	if s.webhooks != nil {
+		s.webhooks.Emit(ctx, webhook.EventMediaDeleted, map[string]any{
+			"public_id":     m.PublicID.String(),
+			"type":          m.Type,
+			"name":          m.Name,
+			"deleted_count": deletedCount,
+		})
+	}
 	return &DeleteObjectResult{DeletedCount: deletedCount}, nil
 }
 

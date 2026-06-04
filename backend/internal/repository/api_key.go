@@ -15,17 +15,18 @@ import (
 var ErrAPIKeyNotFound = errors.New("api key not found")
 
 type APIKey struct {
-	ID             int64
-	PublicID       uuid.UUID
-	Name           string
-	KeyHash        string
-	Scopes         []string
-	AllowedDomains []string
-	AllowedIPs     []string
-	Status         string
-	CreatedBy      *int64
-	LastUsedAt     *time.Time
-	CreatedAt      time.Time
+	ID                  int64
+	PublicID            uuid.UUID
+	Name                string
+	KeyHash             string
+	Scopes              []string
+	AllowedDomains      []string
+	AllowedIPs          []string
+	RootFolderPublicID  *uuid.UUID
+	Status              string
+	CreatedBy           *int64
+	LastUsedAt          *time.Time
+	CreatedAt           time.Time
 }
 
 type APIKeyRepository struct {
@@ -41,7 +42,7 @@ func scanAPIKey(row pgx.Row) (*APIKey, error) {
 	var scopesJSON, domainsJSON, ipsJSON []byte
 	err := row.Scan(
 		&k.ID, &k.PublicID, &k.Name, &k.KeyHash, &scopesJSON, &domainsJSON, &ipsJSON,
-		&k.Status, &k.CreatedBy, &k.LastUsedAt, &k.CreatedAt,
+		&k.RootFolderPublicID, &k.Status, &k.CreatedBy, &k.LastUsedAt, &k.CreatedAt,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -64,21 +65,21 @@ func scanAPIKey(row pgx.Row) (*APIKey, error) {
 	return &k, nil
 }
 
-func (r *APIKeyRepository) Create(ctx context.Context, publicID uuid.UUID, name, keyHash string, scopes, domains, ips []string, createdBy int64) (*APIKey, error) {
+func (r *APIKeyRepository) Create(ctx context.Context, publicID uuid.UUID, name, keyHash string, scopes, ips []string, rootFolderPublicID *uuid.UUID, createdBy int64) (*APIKey, error) {
 	scopesJSON, _ := json.Marshal(scopes)
-	domainsJSON, _ := json.Marshal(domains)
+	domainsJSON, _ := json.Marshal([]string{})
 	ipsJSON, _ := json.Marshal(ips)
 	row := r.pool.QueryRow(ctx, `
-		INSERT INTO api_keys (public_id, name, key_hash, scopes, allowed_domains, allowed_ips, created_by)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
-		RETURNING id, public_id, name, key_hash, scopes, allowed_domains, allowed_ips, status, created_by, last_used_at, created_at
-	`, publicID, name, keyHash, scopesJSON, domainsJSON, ipsJSON, createdBy)
+		INSERT INTO api_keys (public_id, name, key_hash, scopes, allowed_domains, allowed_ips, root_folder_public_id, created_by)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		RETURNING id, public_id, name, key_hash, scopes, allowed_domains, allowed_ips, root_folder_public_id, status, created_by, last_used_at, created_at
+	`, publicID, name, keyHash, scopesJSON, domainsJSON, ipsJSON, rootFolderPublicID, createdBy)
 	return scanAPIKey(row)
 }
 
 func (r *APIKeyRepository) List(ctx context.Context) ([]APIKey, error) {
 	rows, err := r.pool.Query(ctx, `
-		SELECT id, public_id, name, key_hash, scopes, allowed_domains, allowed_ips, status, created_by, last_used_at, created_at
+		SELECT id, public_id, name, key_hash, scopes, allowed_domains, allowed_ips, root_folder_public_id, status, created_by, last_used_at, created_at
 		FROM api_keys ORDER BY created_at DESC
 	`)
 	if err != nil {
@@ -98,7 +99,7 @@ func (r *APIKeyRepository) List(ctx context.Context) ([]APIKey, error) {
 
 func (r *APIKeyRepository) GetByPublicID(ctx context.Context, publicID uuid.UUID) (*APIKey, error) {
 	row := r.pool.QueryRow(ctx, `
-		SELECT id, public_id, name, key_hash, scopes, allowed_domains, allowed_ips, status, created_by, last_used_at, created_at
+		SELECT id, public_id, name, key_hash, scopes, allowed_domains, allowed_ips, root_folder_public_id, status, created_by, last_used_at, created_at
 		FROM api_keys WHERE public_id = $1
 	`, publicID)
 	return scanAPIKey(row)
@@ -106,7 +107,7 @@ func (r *APIKeyRepository) GetByPublicID(ctx context.Context, publicID uuid.UUID
 
 func (r *APIKeyRepository) ListActiveHashes(ctx context.Context) ([]APIKey, error) {
 	rows, err := r.pool.Query(ctx, `
-		SELECT id, public_id, name, key_hash, scopes, allowed_domains, allowed_ips, status, created_by, last_used_at, created_at
+		SELECT id, public_id, name, key_hash, scopes, allowed_domains, allowed_ips, root_folder_public_id, status, created_by, last_used_at, created_at
 		FROM api_keys WHERE status = 'active'
 	`)
 	if err != nil {
@@ -124,7 +125,7 @@ func (r *APIKeyRepository) ListActiveHashes(ctx context.Context) ([]APIKey, erro
 	return list, rows.Err()
 }
 
-func (r *APIKeyRepository) Update(ctx context.Context, publicID uuid.UUID, name *string, scopes, domains, ips []string, status *string) (*APIKey, error) {
+func (r *APIKeyRepository) Update(ctx context.Context, publicID uuid.UUID, name *string, scopes, ips []string, rootFolderPublicID **uuid.UUID, status *string) (*APIKey, error) {
 	cur, err := r.GetByPublicID(ctx, publicID)
 	if err != nil {
 		return nil, err
@@ -140,20 +141,21 @@ func (r *APIKeyRepository) Update(ctx context.Context, publicID uuid.UUID, name 
 	if scopes == nil {
 		scopes = cur.Scopes
 	}
-	if domains == nil {
-		domains = cur.AllowedDomains
-	}
 	if ips == nil {
 		ips = cur.AllowedIPs
 	}
+	rootFolder := cur.RootFolderPublicID
+	if rootFolderPublicID != nil {
+		rootFolder = *rootFolderPublicID
+	}
 	scopesJSON, _ := json.Marshal(scopes)
-	domainsJSON, _ := json.Marshal(domains)
+	domainsJSON, _ := json.Marshal([]string{})
 	ipsJSON, _ := json.Marshal(ips)
 	row := r.pool.QueryRow(ctx, `
-		UPDATE api_keys SET name = $2, scopes = $3, allowed_domains = $4, allowed_ips = $5, status = $6
+		UPDATE api_keys SET name = $2, scopes = $3, allowed_domains = $4, allowed_ips = $5, root_folder_public_id = $6, status = $7
 		WHERE public_id = $1
-		RETURNING id, public_id, name, key_hash, scopes, allowed_domains, allowed_ips, status, created_by, last_used_at, created_at
-	`, publicID, n, scopesJSON, domainsJSON, ipsJSON, st)
+		RETURNING id, public_id, name, key_hash, scopes, allowed_domains, allowed_ips, root_folder_public_id, status, created_by, last_used_at, created_at
+	`, publicID, n, scopesJSON, domainsJSON, ipsJSON, rootFolder, st)
 	return scanAPIKey(row)
 }
 

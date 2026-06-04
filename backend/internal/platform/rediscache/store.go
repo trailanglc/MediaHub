@@ -60,6 +60,38 @@ func (s *Store) Enabled() bool {
 	return s != nil && s.rdb != nil
 }
 
+// Publish sends a message on a Redis pub/sub channel (best-effort, no-op when disabled).
+func (s *Store) Publish(ctx context.Context, channel, message string) {
+	if !s.Enabled() {
+		return
+	}
+	_ = s.rdb.Publish(ctx, channel, message).Err()
+}
+
+// Subscribe invokes handler for every message on the channel until ctx is cancelled.
+// It runs in its own goroutine and reconnects are handled by go-redis. No-op when disabled.
+func (s *Store) Subscribe(ctx context.Context, channel string, handler func(message string)) {
+	if !s.Enabled() || handler == nil {
+		return
+	}
+	go func() {
+		sub := s.rdb.Subscribe(ctx, channel)
+		defer sub.Close() //nolint:errcheck
+		ch := sub.Channel()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case msg, ok := <-ch:
+				if !ok {
+					return
+				}
+				handler(msg.Payload)
+			}
+		}
+	}()
+}
+
 func (s *Store) GetJSON(ctx context.Context, key string, dest any) (bool, error) {
 	if !s.Enabled() {
 		return false, nil
@@ -104,6 +136,30 @@ func (s *Store) Delete(ctx context.Context, keys ...string) error {
 		return nil
 	}
 	return s.rdb.Del(ctx, keys...).Err()
+}
+
+func (s *Store) GetBytes(ctx context.Context, key string) ([]byte, bool, error) {
+	if !s.Enabled() {
+		return nil, false, nil
+	}
+	raw, err := s.rdb.Get(ctx, key).Bytes()
+	if err == redis.Nil {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	return raw, true, nil
+}
+
+func (s *Store) SetBytes(ctx context.Context, key string, data []byte, ttl time.Duration) error {
+	if !s.Enabled() {
+		return nil
+	}
+	if s.skipCacheSet(ctx) {
+		return nil
+	}
+	return s.rdb.Set(ctx, key, data, s.effectiveTTL(ctx, ttl)).Err()
 }
 
 // DeleteByPrefix removes keys matching prefix* via SCAN (bounded iterations).

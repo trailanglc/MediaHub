@@ -1,6 +1,11 @@
 package handler
 
-import "testing"
+import (
+	"testing"
+	"time"
+
+	"github.com/anhtuanlc/mediahub/internal/service"
+)
 
 func TestIsHLSPlaylistPath(t *testing.T) {
 	cases := map[string]bool{
@@ -64,6 +69,85 @@ func findSub(s, sub string) bool {
 		}
 	}
 	return false
+}
+
+func TestSignPlaylistBody_signsSegmentsNotPlaylists(t *testing.T) {
+	h := &StreamHandler{
+		streamTok:        service.NewStreamTokenService("test-secret"),
+		segmentURLWindow: time.Hour,
+	}
+	vid := "550e8400-e29b-41d4-a716-446655440000"
+
+	// Variant media playlist: segment lines must be signed.
+	variant := []byte("#EXTM3U\n#EXTINF:6.0,\nsegment_00001.ts\n#EXT-X-ENDLIST\n")
+	out := string(h.signPlaylistBody(vid, variant))
+	if !containsStr(out, "segment_00001.ts?e=") || !containsStr(out, "&s=") {
+		t.Fatalf("expected signed segment, got %q", out)
+	}
+
+	// Master playlist: variant references stay untouched (still session-authorized).
+	master := []byte("#EXTM3U\n720p/index.m3u8\n1080p/index.m3u8\n")
+	mout := string(h.signPlaylistBody(vid, master))
+	if containsStr(mout, "index.m3u8?e=") || containsStr(mout, "&s=") {
+		t.Fatalf("master variant playlists must not be signed, got %q", mout)
+	}
+}
+
+func TestSignPlaylistBody_verifiesAgainstService(t *testing.T) {
+	tok := service.NewStreamTokenService("test-secret")
+	h := &StreamHandler{streamTok: tok, segmentURLWindow: time.Hour}
+	vid := "550e8400-e29b-41d4-a716-446655440000"
+	out := string(h.signPlaylistBody(vid, []byte("#EXTM3U\nsegment_00001.ts\n")))
+
+	// Extract e= and s= and confirm the signature validates.
+	var exp int64
+	var sig string
+	for _, line := range []string{out} {
+		if i := indexOf(line, "?e="); i >= 0 {
+			rest := line[i+3:]
+			amp := indexOf(rest, "&s=")
+			expStr := rest[:amp]
+			sigPart := rest[amp+3:]
+			if nl := indexOf(sigPart, "\n"); nl >= 0 {
+				sigPart = sigPart[:nl]
+			}
+			sig = sigPart
+			for _, ch := range expStr {
+				exp = exp*10 + int64(ch-'0')
+			}
+		}
+	}
+	if err := tok.VerifySegment(vid, sig, exp); err != nil {
+		t.Fatalf("signed segment must verify: %v (exp=%d sig=%q)", err, exp, sig)
+	}
+}
+
+func indexOf(s, sub string) int {
+	for i := 0; i+len(sub) <= len(s); i++ {
+		if s[i:i+len(sub)] == sub {
+			return i
+		}
+	}
+	return -1
+}
+
+func TestEtagMatches(t *testing.T) {
+	etag := weakETag([]byte("hello"))
+	if !etagMatches(etag, etag) {
+		t.Fatal("identical etag should match")
+	}
+	if !etagMatches("W/"+etag, etag) {
+		t.Fatal("weak prefix should match")
+	}
+	if !etagMatches("*", etag) {
+		t.Fatal("wildcard should match")
+	}
+	if etagMatches("\"other\"", etag) {
+		t.Fatal("different etag must not match")
+	}
+	if etagMatches("", etag) {
+		t.Fatal("empty header must not match")
+	}
 }
 
 func TestPlaylistCache(t *testing.T) {

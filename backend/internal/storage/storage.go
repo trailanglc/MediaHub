@@ -13,9 +13,15 @@ type ObjectStorage interface {
 	StatObject(ctx context.Context, key string) (*ObjectInfo, error)
 	// GetObjectRange reads [offset, offset+length); length < 0 means to end of object.
 	GetObjectRange(ctx context.Context, key string, offset, length int64) (io.ReadCloser, *ObjectInfo, error)
+	// GetRange fetches an object, passing through a raw HTTP Range header ("" = full object).
+	// The returned ObjectInfo carries Size (body length), TotalSize, ETag, ContentType and
+	// ContentRange (set for 206 partial responses). This avoids a separate HeadObject round-trip.
+	GetRange(ctx context.Context, key, rangeHeader string) (io.ReadCloser, *ObjectInfo, error)
 	DeleteObject(ctx context.Context, key string) error
 	Exists(ctx context.Context, key string) (bool, error)
 	PresignGetObject(ctx context.Context, key string, ttl time.Duration) (string, error)
+	// PresignPutObject returns a URL for a single PUT upload with fixed size and content type.
+	PresignPutObject(ctx context.Context, key, contentType string, size int64, ttl time.Duration) (string, error)
 	Ping(ctx context.Context) error
 	Stats(ctx context.Context) (*StorageStats, error)
 

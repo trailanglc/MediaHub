@@ -14,10 +14,12 @@ import (
 	platredis "github.com/anhtuanlc/mediahub/internal/platform/redis"
 	"github.com/anhtuanlc/mediahub/internal/platform/rediscache"
 	"github.com/anhtuanlc/mediahub/internal/platform/resource"
+	"github.com/anhtuanlc/mediahub/internal/platform/webhook"
 	convertprogress "github.com/anhtuanlc/mediahub/internal/platform/convert"
 	workerhb "github.com/anhtuanlc/mediahub/internal/platform/worker"
 	internalworker "github.com/anhtuanlc/mediahub/internal/worker"
 	"github.com/anhtuanlc/mediahub/internal/storage"
+	"github.com/anhtuanlc/mediahub/internal/repository"
 	"github.com/hibiken/asynq"
 	"github.com/joho/godotenv"
 	"go.uber.org/zap"
@@ -80,6 +82,7 @@ func main() {
 		GovernorEnabled: cfg.ResourceGovernorEnabled,
 		ResourcePolicy:  resPolicy,
 		Gate:            gate,
+		Webhooks:        webhook.NewDispatcher(repository.NewWebhookRepository(pool), logger),
 		HeartbeatTouch: func(ctx context.Context) error {
 			return heartbeat.Touch(ctx)
 		},

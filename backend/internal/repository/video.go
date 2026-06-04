@@ -412,7 +412,50 @@ func (r *VideoRepository) CountJobsByStatus(ctx context.Context) (map[string]int
 	return out, rows.Err()
 }
 
-// DeleteFinishedJobsOlderThan removes terminal convert jobs older than cutoff, in batches.
+type FailedConvertJobRow struct {
+	JobPublicID   uuid.UUID
+	VideoPublicID uuid.UUID
+	VideoName     string
+	Attempts      int
+	MaxAttempts   int
+	Error         *string
+	FinishedAt    *time.Time
+}
+
+func (r *VideoRepository) ListRecentFailedJobs(ctx context.Context, limit int) ([]FailedConvertJobRow, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	if limit > 200 {
+		limit = 200
+	}
+	rows, err := r.pool.Query(ctx, `
+		SELECT j.public_id, m.public_id, m.name, j.attempts, j.max_attempts, j.error, j.finished_at
+		FROM convert_jobs j
+		JOIN video_assets v ON v.id = j.video_asset_id
+		JOIN media_objects m ON m.id = v.object_id AND m.deleted_at IS NULL
+		WHERE j.status = 'failed'
+		ORDER BY j.finished_at DESC NULLS LAST, j.id DESC
+		LIMIT $1
+	`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var list []FailedConvertJobRow
+	for rows.Next() {
+		var row FailedConvertJobRow
+		if err := rows.Scan(
+			&row.JobPublicID, &row.VideoPublicID, &row.VideoName,
+			&row.Attempts, &row.MaxAttempts, &row.Error, &row.FinishedAt,
+		); err != nil {
+			return nil, err
+		}
+		list = append(list, row)
+	}
+	return list, rows.Err()
+}
+
 func (r *VideoRepository) DeleteFinishedJobsOlderThan(ctx context.Context, before time.Time, batchSize int) (int64, error) {
 	if batchSize <= 0 {
 		batchSize = 1000

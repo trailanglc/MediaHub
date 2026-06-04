@@ -11,6 +11,7 @@ import (
 	convertprogress "github.com/anhtuanlc/mediahub/internal/platform/convert"
 	"github.com/anhtuanlc/mediahub/internal/platform/rediscache"
 	"github.com/anhtuanlc/mediahub/internal/platform/resource"
+	"github.com/anhtuanlc/mediahub/internal/platform/webhook"
 	"github.com/anhtuanlc/mediahub/internal/repository"
 	"github.com/anhtuanlc/mediahub/internal/storage"
 	"github.com/anhtuanlc/mediahub/internal/transcode"
@@ -24,6 +25,7 @@ var (
 	ErrVideoConvertActive  = errors.New("convert already in progress")
 	ErrVideoNotStreamable   = errors.New("video is not ready for streaming")
 	ErrVideoInvalidVariants = errors.New("invalid convert variants")
+	ErrVideoRetryNotAllowed = errors.New("convert retry not allowed")
 	ErrSystemBusy           = errors.New("system busy")
 )
 
@@ -41,13 +43,14 @@ type VideoCapabilities struct {
 }
 
 type ConvertJobDTO struct {
-	PublicID   string     `json:"public_id"`
-	Status     string     `json:"status"`
-	Attempts   int        `json:"attempts"`
-	Error      *string    `json:"error,omitempty"`
-	StartedAt  *time.Time `json:"started_at,omitempty"`
-	FinishedAt *time.Time `json:"finished_at,omitempty"`
-	CreatedAt  time.Time  `json:"created_at"`
+	PublicID    string     `json:"public_id"`
+	Status      string     `json:"status"`
+	Attempts    int        `json:"attempts"`
+	MaxAttempts int        `json:"max_attempts"`
+	Error       *string    `json:"error,omitempty"`
+	StartedAt   *time.Time `json:"started_at,omitempty"`
+	FinishedAt  *time.Time `json:"finished_at,omitempty"`
+	CreatedAt   time.Time  `json:"created_at"`
 }
 
 type StreamPolicyDTO struct {
@@ -102,6 +105,7 @@ type VideoService struct {
 	convertProgress *convertprogress.ProgressStore
 	cache           *rediscache.Store
 	resources       *resource.Reader
+	webhooks        *webhook.Dispatcher
 }
 
 func NewVideoService(
@@ -132,6 +136,10 @@ func NewVideoService(
 		cache:           cache,
 		resources:       resources,
 	}
+}
+
+func (s *VideoService) SetWebhooks(d *webhook.Dispatcher) {
+	s.webhooks = d
 }
 
 func (s *VideoService) invalidateStreamCache(ctx context.Context, publicID uuid.UUID) {
@@ -199,13 +207,14 @@ func jobToDTO(j *repository.ConvertJob) *ConvertJobDTO {
 		return nil
 	}
 	return &ConvertJobDTO{
-		PublicID:   j.PublicID.String(),
-		Status:     j.Status,
-		Attempts:   j.Attempts,
-		Error:      j.Error,
-		StartedAt:  j.StartedAt,
-		FinishedAt: j.FinishedAt,
-		CreatedAt:  j.CreatedAt,
+		PublicID:    j.PublicID.String(),
+		Status:      j.Status,
+		Attempts:    j.Attempts,
+		MaxAttempts: j.MaxAttempts,
+		Error:       j.Error,
+		StartedAt:   j.StartedAt,
+		FinishedAt:  j.FinishedAt,
+		CreatedAt:   j.CreatedAt,
 	}
 }
 
@@ -435,7 +444,38 @@ func (s *VideoService) StartConvert(ctx context.Context, userID int64, role, ip,
 	if err != nil {
 		return jobToDTO(&repository.ConvertJob{PublicID: jobPID, Status: "pending", CreatedAt: time.Now()}), nil
 	}
+	if s.webhooks != nil {
+		s.webhooks.Emit(ctx, webhook.EventConvertStarted, map[string]any{
+			"public_id": publicID.String(),
+			"job_id":    jobPID.String(),
+		})
+	}
 	return jobToDTO(j), nil
+}
+
+// RetryConvert starts a new convert job when the latest attempt failed.
+func (s *VideoService) RetryConvert(ctx context.Context, userID int64, role, ip, ua string, publicID uuid.UUID, input StartConvertInput) (*ConvertJobDTO, error) {
+	row, err := s.videos.GetByObjectPublicID(ctx, publicID)
+	if err != nil {
+		if errors.Is(err, repository.ErrVideoAssetNotFound) {
+			return nil, ErrVideoNotFound
+		}
+		return nil, err
+	}
+	if !s.videoCapabilities(ctx, userID, role, row.Media.ID).Convert {
+		return nil, ErrVideoAccessDenied
+	}
+	if row.Asset.HLSStatus != "failed" {
+		return nil, ErrVideoRetryNotAllowed
+	}
+	active, err := s.videos.GetActiveJobForAsset(ctx, row.Asset.ID)
+	if err != nil {
+		return nil, err
+	}
+	if active != nil {
+		return nil, ErrVideoConvertActive
+	}
+	return s.StartConvert(ctx, userID, role, ip, ua, publicID, input)
 }
 
 func (s *VideoService) GetHLSAccess(ctx context.Context, userID int64, role string, publicID uuid.UUID) (*HLSAccessDTO, error) {
@@ -467,14 +507,13 @@ func (s *VideoService) GetHLSAccess(ctx context.Context, userID int64, role stri
 	ttl := time.Duration(pol.TokenTTLSeconds) * time.Second
 	exp := time.Now().Add(ttl)
 	masterURL := s.streamTok.BuildStreamURL(s.streamBaseURL, publicID.String(), "master.m3u8", ttl)
-	// Chỉ URL + iframe (không dùng <script>) — nhúng HLS qua player riêng hoặc HlsPlayer.
-	embed := fmt.Sprintf(
-		`<iframe src="%s" allow="autoplay; encrypted-media" allowfullscreen style="width:100%%;aspect-ratio:16/9;border:0"></iframe>`,
-		masterURL,
+	embedHTML := fmt.Sprintf(
+		`<iframe src="%s" allow="autoplay; encrypted-media; fullscreen" allowfullscreen style="width:100%%;aspect-ratio:16/9;border:0"></iframe>`,
+		s.streamTok.BuildEmbedURL(s.streamBaseURL, publicID.String(), ttl),
 	)
 	return &HLSAccessDTO{
 		MasterURL: masterURL,
-		EmbedHTML: embed,
+		EmbedHTML: embedHTML,
 		ExpiresAt: exp.Unix(),
 	}, nil
 }
@@ -570,4 +609,30 @@ func (s *VideoService) UpdateStreamPolicy(ctx context.Context, userID int64, rol
 
 func (s *VideoService) Stats(ctx context.Context) (map[string]int64, error) {
 	return s.videos.CountByHLSStatus(ctx)
+}
+
+// HLSStatus returns the HLS lifecycle state for a video object.
+func (s *VideoService) HLSStatus(ctx context.Context, publicID uuid.UUID) (string, error) {
+	row, err := s.videos.GetByObjectPublicID(ctx, publicID)
+	if err != nil {
+		return "", err
+	}
+	return row.Asset.HLSStatus, nil
+}
+
+// AllowSourceDownload reports whether the original file may be delivered via /assets/.../file.
+// Non-video objects are always allowed; videos follow stream_policies.allow_download.
+func (s *VideoService) AllowSourceDownload(ctx context.Context, m *repository.MediaObject) (bool, error) {
+	if m == nil || m.Type != "video" {
+		return true, nil
+	}
+	row, err := s.videos.GetByObjectPublicID(ctx, m.PublicID)
+	if err != nil {
+		return false, err
+	}
+	pol, err := s.videos.GetOrCreateStreamPolicy(ctx, row.Asset.ID, 3600)
+	if err != nil {
+		return false, err
+	}
+	return pol.AllowDownload, nil
 }

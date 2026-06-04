@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/anhtuanlc/mediahub/internal/authz"
 	"github.com/anhtuanlc/mediahub/internal/config"
@@ -57,7 +58,7 @@ func TestUploadInit(t *testing.T) {
 	uploadRepo := repository.NewUploadSessionRepository(pool)
 	mediaSvc := service.NewMediaObjectService(mediaRepo, settingsSvc, authzSvc, auditRepo, store, nil, nil)
 	thumbnailSvc := service.NewThumbnailService(mediaRepo, store)
-	uploadSvc := service.NewUploadService(uploadRepo, mediaSvc, pool, store, thumbnailSvc, nil, 10)
+	uploadSvc := service.NewUploadService(uploadRepo, mediaSvc, pool, store, thumbnailSvc, nil, 10, time.Hour)
 
 	root, _ := uuid.Parse(repository.DefaultRootFolderPublicID)
 	out, err := uploadSvc.Init(ctx, ownerID, "owner", service.InitUploadInput{

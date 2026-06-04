@@ -96,6 +96,21 @@ func (r *MediaObjectRepository) GetByPublicID(ctx context.Context, publicID uuid
 	return scanMediaObject(row)
 }
 
+// IsDescendantOf reports whether objectID is the ancestor or a descendant of ancestorID.
+func (r *MediaObjectRepository) IsDescendantOf(ctx context.Context, objectID, ancestorID int64) (bool, error) {
+	if objectID == ancestorID {
+		return true, nil
+	}
+	var exists bool
+	err := r.pool.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM object_paths
+			WHERE ancestor_id = $1 AND descendant_id = $2
+		)
+	`, ancestorID, objectID).Scan(&exists)
+	return exists, err
+}
+
 func (r *MediaObjectRepository) ListByPublicIDs(ctx context.Context, publicIDs []uuid.UUID) ([]MediaObject, error) {
 	if len(publicIDs) == 0 {
 		return nil, nil

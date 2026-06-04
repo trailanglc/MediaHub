@@ -150,50 +150,6 @@ export function VideoDetailScaffold({ id }: { id: string }) {
   );
 }
 
-export function ApiKeysScaffold() {
-  return (
-    <FeatureScaffold
-      title="API Keys"
-      description="Tạo và quản lý khóa truy cập API cho tích hợp bên ngoài."
-    >
-      <Alert>
-        <InfoIcon />
-        <AlertDescription>
-          API Keys sẽ được kích hoạt trong phase tiếp theo. Khóa hiện tại chỉ là giao diện mẫu.
-        </AlertDescription>
-      </Alert>
-      <Card>
-        <CardHeader className="flex flex-row items-center justify-between">
-          <CardTitle>Danh sách khóa</CardTitle>
-          <Button disabled>+ Tạo key</Button>
-        </CardHeader>
-        <CardContent>
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Tên</TableHead>
-                <TableHead>Prefix</TableHead>
-                <TableHead>Tạo lúc</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {["Production", "Staging"].map((name) => (
-                <TableRow key={name}>
-                  <TableCell>{name}</TableCell>
-                  <TableCell>
-                    <code className="text-xs">mh_••••••••</code>
-                  </TableCell>
-                  <TableCell className="text-muted-foreground">—</TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </CardContent>
-      </Card>
-    </FeatureScaffold>
-  );
-}
-
 export function StorageScaffold() {
   return (
     <FeatureScaffold

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -165,6 +166,57 @@ func (s *S3Storage) StatObject(ctx context.Context, key string) (*ObjectInfo, er
 		return nil, fmt.Errorf("head object %s: %w", key, err)
 	}
 	return headToObjectInfo(out), nil
+}
+
+// GetRange fetches the object, forwarding a raw HTTP Range header to the backend.
+// A single GetObject call returns body + metadata, removing the need for a prior HeadObject.
+func (s *S3Storage) GetRange(ctx context.Context, key, rangeHeader string) (io.ReadCloser, *ObjectInfo, error) {
+	in := &s3.GetObjectInput{
+		Bucket: aws.String(s.bucket),
+		Key:    aws.String(key),
+	}
+	if strings.TrimSpace(rangeHeader) != "" {
+		in.Range = aws.String(rangeHeader)
+	}
+	out, err := s.client.GetObject(ctx, in)
+	if err != nil {
+		return nil, nil, fmt.Errorf("get range %s: %w", key, err)
+	}
+	info := &ObjectInfo{}
+	if out.ContentLength != nil {
+		info.Size = *out.ContentLength
+	}
+	info.TotalSize = info.Size
+	if out.ContentType != nil {
+		info.ContentType = *out.ContentType
+	}
+	if out.ETag != nil {
+		info.ETag = strings.Trim(*out.ETag, "\"")
+	}
+	if out.ContentRange != nil {
+		info.ContentRange = *out.ContentRange
+		if total := parseContentRangeTotal(*out.ContentRange); total > 0 {
+			info.TotalSize = total
+		}
+	}
+	return out.Body, info, nil
+}
+
+// parseContentRangeTotal extracts the total size from "bytes start-end/total".
+func parseContentRangeTotal(cr string) int64 {
+	idx := strings.LastIndex(cr, "/")
+	if idx < 0 {
+		return 0
+	}
+	totalStr := strings.TrimSpace(cr[idx+1:])
+	if totalStr == "" || totalStr == "*" {
+		return 0
+	}
+	n, err := strconv.ParseInt(totalStr, 10, 64)
+	if err != nil {
+		return 0
+	}
+	return n
 }
 
 func (s *S3Storage) GetObjectRange(ctx context.Context, key string, offset, length int64) (io.ReadCloser, *ObjectInfo, error) {
@@ -475,6 +527,25 @@ func (s *S3Storage) PresignGetObject(ctx context.Context, key string, ttl time.D
 	}, s3.WithPresignExpires(ttl))
 	if err != nil {
 		return "", fmt.Errorf("presign get %s: %w", key, err)
+	}
+	return out.URL, nil
+}
+
+func (s *S3Storage) PresignPutObject(ctx context.Context, key, contentType string, size int64, ttl time.Duration) (string, error) {
+	presigner := s3.NewPresignClient(s.client)
+	in := &s3.PutObjectInput{
+		Bucket: aws.String(s.bucket),
+		Key:    aws.String(key),
+	}
+	if contentType != "" {
+		in.ContentType = aws.String(contentType)
+	}
+	if size > 0 {
+		in.ContentLength = aws.Int64(size)
+	}
+	out, err := presigner.PresignPutObject(ctx, in, s3.WithPresignExpires(ttl))
+	if err != nil {
+		return "", fmt.Errorf("presign put %s: %w", key, err)
 	}
 	return out.URL, nil
 }

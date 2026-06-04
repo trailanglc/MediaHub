@@ -13,6 +13,7 @@ import (
 	convertprogress "github.com/anhtuanlc/mediahub/internal/platform/convert"
 	"github.com/anhtuanlc/mediahub/internal/platform/rediscache"
 	"github.com/anhtuanlc/mediahub/internal/platform/resource"
+	"github.com/anhtuanlc/mediahub/internal/platform/webhook"
 	"github.com/anhtuanlc/mediahub/internal/repository"
 	"github.com/anhtuanlc/mediahub/internal/storage"
 	"github.com/anhtuanlc/mediahub/internal/transcode"
@@ -36,6 +37,7 @@ type ConvertDeps struct {
 	GovernorEnabled bool
 	ResourcePolicy  resource.PolicyConfig
 	Gate            *resource.DynamicGate
+	Webhooks        *webhook.Dispatcher
 }
 
 type ConvertProcessor struct {
@@ -170,6 +172,12 @@ func (p *ConvertProcessor) ProcessTask(ctx context.Context, t *asynq.Task) error
 	if p.deps.ConvertProgress != nil {
 		_ = p.deps.ConvertProgress.Clear(ctx, videoID)
 	}
+	if p.deps.Webhooks != nil {
+		p.deps.Webhooks.Emit(ctx, webhook.EventConvertCompleted, map[string]any{
+			"public_id": videoPID.String(),
+			"job_id":    jobPID.String(),
+		})
+	}
 	return nil
 }
 
@@ -227,6 +235,13 @@ func (p *ConvertProcessor) fail(ctx context.Context, videos *repository.VideoRep
 	_ = videos.UpdateJobStatus(ctx, job.ID, "failed", &errMsg)
 	if p.deps.ConvertProgress != nil {
 		_ = p.deps.ConvertProgress.Clear(ctx, videoID)
+	}
+	if p.deps.Webhooks != nil {
+		p.deps.Webhooks.Emit(ctx, webhook.EventConvertFailed, map[string]any{
+			"public_id": videoPID.String(),
+			"job_id":    job.PublicID.String(),
+			"error":     msg,
+		})
 	}
 	if job.Attempts+1 < job.MaxAttempts {
 		return fmt.Errorf("convert failed (retryable): %s", msg)

@@ -1,0 +1,160 @@
+{
+  "info": {
+    "name": "MediaHub API",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "description": "Integration v1 (X-API-Key) + Owner management (JWT Bearer). Set variables: baseUrl, apiKey, accessToken"
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:8080" },
+    { "key": "apiKey", "value": "YOUR_API_KEY" },
+    { "key": "accessToken", "value": "YOUR_JWT_ACCESS_TOKEN" },
+    { "key": "sessionId", "value": "" },
+    { "key": "mediaId", "value": "" },
+    { "key": "keyPublicId", "value": "" }
+  ],
+  "auth": {
+    "type": "apikey",
+    "apikey": [
+      { "key": "key", "value": "X-API-Key", "type": "string" },
+      { "key": "value", "value": "{{apiKey}}", "type": "string" },
+      { "key": "in", "value": "header", "type": "string" }
+    ]
+  },
+  "item": [
+    {
+      "name": "Management (Owner JWT)",
+      "item": [
+        {
+          "name": "List API keys",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [{ "key": "token", "value": "{{accessToken}}", "type": "string" }]
+            },
+            "method": "GET",
+            "url": "{{baseUrl}}/api/api-keys"
+          }
+        },
+        {
+          "name": "Create API key",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [{ "key": "token", "value": "{{accessToken}}", "type": "string" }]
+            },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Postman test\",\n  \"scopes\": [\"stream\", \"media:upload\", \"media:read\", \"media:convert\", \"media:delete\"]\n}"
+            },
+            "url": "{{baseUrl}}/api/api-keys"
+          }
+        },
+        {
+          "name": "Patch API key",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [{ "key": "token", "value": "{{accessToken}}", "type": "string" }]
+            },
+            "method": "PATCH",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Postman test (updated)\",\n  \"allowed_ips\": [\"203.0.113.10\"]\n}"
+            },
+            "url": "{{baseUrl}}/api/api-keys/{{keyPublicId}}"
+          }
+        },
+        {
+          "name": "Revoke API key",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [{ "key": "token", "value": "{{accessToken}}", "type": "string" }]
+            },
+            "method": "DELETE",
+            "url": "{{baseUrl}}/api/api-keys/{{keyPublicId}}"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Upload init (multipart)",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"file_name\": \"sample.mp4\",\n  \"size\": 1048576,\n  \"mime_type\": \"video/mp4\"\n}"
+        },
+        "url": "{{baseUrl}}/api/v1/media/upload/init"
+      }
+    },
+    {
+      "name": "Upload init (direct PUT)",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"file_name\": \"photo.jpg\",\n  \"size\": 102400,\n  \"mime_type\": \"image/jpeg\",\n  \"upload_mode\": \"direct\"\n}"
+        },
+        "url": "{{baseUrl}}/api/v1/media/upload/init"
+      }
+    },
+    {
+      "name": "Upload complete",
+      "request": {
+        "method": "POST",
+        "url": "{{baseUrl}}/api/v1/media/upload/{{sessionId}}/complete"
+      }
+    },
+    {
+      "name": "Get media",
+      "request": {
+        "method": "GET",
+        "url": "{{baseUrl}}/api/v1/media/{{mediaId}}"
+      }
+    },
+    {
+      "name": "Delivery URLs (batch)",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"ids\": [\"{{mediaId}}\"]\n}"
+        },
+        "url": "{{baseUrl}}/api/v1/media/delivery-urls"
+      }
+    },
+    {
+      "name": "Convert video",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"variants\": [\"720p\", \"480p\"]\n}"
+        },
+        "url": "{{baseUrl}}/api/v1/media/{{mediaId}}/convert"
+      }
+    },
+    {
+      "name": "Retry convert",
+      "request": {
+        "method": "POST",
+        "url": "{{baseUrl}}/api/v1/media/{{mediaId}}/convert/retry"
+      }
+    },
+    {
+      "name": "Get HLS access",
+      "request": {
+        "method": "GET",
+        "url": "{{baseUrl}}/api/v1/media/{{mediaId}}/hls"
+      }
+    }
+  ]
+}

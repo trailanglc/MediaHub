@@ -88,6 +88,27 @@ func (h *QueueHandler) QueueStatus(c *gin.Context) {
 		"video_hls":    videos,
 		"queue_depth":  queueDepth,
 	}
+	if failed, err := h.Videos.ListRecentFailedJobs(ctx, 50); err == nil && len(failed) > 0 {
+		items := make([]gin.H, 0, len(failed))
+		for i := range failed {
+			row := failed[i]
+			item := gin.H{
+				"job_public_id":   row.JobPublicID.String(),
+				"video_public_id": row.VideoPublicID.String(),
+				"video_name":      row.VideoName,
+				"attempts":        row.Attempts,
+				"max_attempts":    row.MaxAttempts,
+			}
+			if row.Error != nil {
+				item["error"] = *row.Error
+			}
+			if row.FinishedAt != nil {
+				item["finished_at"] = row.FinishedAt.UTC().Format(time.RFC3339)
+			}
+			items = append(items, item)
+		}
+		resp["failed_jobs"] = items
+	}
 	if mediaObjects != nil {
 		resp["media_objects"] = mediaObjects
 	}

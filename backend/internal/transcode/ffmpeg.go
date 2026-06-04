@@ -18,6 +18,7 @@ type ProbeResult struct {
 	Height          int
 	Codec           string
 	Bitrate         int64
+	FPS             float64
 }
 
 type Config struct {
@@ -63,10 +64,12 @@ func Probe(ctx context.Context, cfg Config, inputPath string) (*ProbeResult, err
 			BitRate  string `json:"bit_rate"`
 		} `json:"format"`
 		Streams []struct {
-			CodecType string `json:"codec_type"`
-			CodecName string `json:"codec_name"`
-			Width     int    `json:"width"`
-			Height    int    `json:"height"`
+			CodecType    string `json:"codec_type"`
+			CodecName    string `json:"codec_name"`
+			Width        int    `json:"width"`
+			Height       int    `json:"height"`
+			RFrameRate   string `json:"r_frame_rate"`
+			AvgFrameRate string `json:"avg_frame_rate"`
 		} `json:"streams"`
 	}
 	if err := json.Unmarshal(out, &parsed); err != nil {
@@ -84,10 +87,35 @@ func Probe(ctx context.Context, cfg Config, inputPath string) (*ProbeResult, err
 			res.Width = s.Width
 			res.Height = s.Height
 			res.Codec = s.CodecName
+			res.FPS = parseFrameRate(s.RFrameRate)
+			if res.FPS <= 0 {
+				res.FPS = parseFrameRate(s.AvgFrameRate)
+			}
 			break
 		}
 	}
 	return res, nil
+}
+
+// parseFrameRate converts ffprobe rational frame rate ("30000/1001") to fps.
+func parseFrameRate(s string) float64 {
+	s = strings.TrimSpace(s)
+	if s == "" || s == "0/0" {
+		return 0
+	}
+	if i := strings.Index(s, "/"); i >= 0 {
+		num, err1 := strconv.ParseFloat(s[:i], 64)
+		den, err2 := strconv.ParseFloat(s[i+1:], 64)
+		if err1 == nil && err2 == nil && den != 0 {
+			return num / den
+		}
+		return 0
+	}
+	f, err := strconv.ParseFloat(s, 64)
+	if err != nil {
+		return 0
+	}
+	return f
 }
 
 // ConvertToHLS runs ffmpeg to produce multi-bitrate HLS under outDir.
@@ -96,8 +124,10 @@ func ConvertToHLS(ctx context.Context, cfg Config, inputPath, outDir string, var
 	probe, _ := Probe(ctx, cfg, inputPath)
 	src := SourceProfile{}
 	if probe != nil {
+		src.Width = probe.Width
 		src.Height = probe.Height
 		src.Bitrate = probe.Bitrate
+		src.FPS = probe.FPS
 	}
 	variants, err := ResolveVariants(variantNames, src)
 	if err != nil {
@@ -138,14 +168,22 @@ func ConvertToHLS(ctx context.Context, cfg Config, inputPath, outDir string, var
 		if i == 0 {
 			preset = "medium" // rendition cao nhất: chất lượng tốt hơn cho bản 1080p
 		}
+		// Pin profile/level so the advertised master CODECS string is exact, and force a
+		// keyframe at every segment boundary (sc_threshold 0 + force_key_frames) so each
+		// segment is independently decodable — required for clean ABR switching and fast seek.
+		levelStr := h264LevelString(encodedWidth(maxH, src), maxH, src.FPS)
 		args := []string{
 			"-y", "-i", inputPath,
 			"-vf", scaleVF(maxH),
 			"-c:v", "libx264", "-preset", preset, "-b:v", EncodeBitrate(v, src),
+			"-profile:v", "high", "-level:v", levelStr,
+			"-sc_threshold", "0",
+			"-force_key_frames", "expr:gte(t,n_forced*6)",
 			"-c:a", "aac", "-b:a", "128k", "-ac", "2",
 			"-f", "hls",
 			"-hls_time", "6",
 			"-hls_playlist_type", "vod",
+			"-hls_flags", "independent_segments",
 			"-hls_segment_filename", filepath.Join(variantDir, "segment_%05d.ts"),
 			filepath.Join(variantDir, "index.m3u8"),
 		}
@@ -161,7 +199,7 @@ func ConvertToHLS(ctx context.Context, cfg Config, inputPath, outDir string, var
 	if onProgress != nil {
 		onProgress("playlist", 72)
 	}
-	return writeMasterPlaylist(outDir, variants)
+	return writeMasterPlaylist(outDir, variants, src)
 }
 
 func trimFFmpegLog(s string) string {
@@ -172,16 +210,95 @@ func trimFFmpegLog(s string) string {
 	return s
 }
 
-func writeMasterPlaylist(outDir string, variants []HLSVariant) error {
+const audioBitrateBps = 128_000
+
+func writeMasterPlaylist(outDir string, variants []HLSVariant, src SourceProfile) error {
 	var lines []string
-	lines = append(lines, "#EXTM3U", "#EXT-X-VERSION:3")
+	lines = append(lines, "#EXTM3U", "#EXT-X-VERSION:3", "#EXT-X-INDEPENDENT-SEGMENTS")
 	for _, v := range variants {
-		bw := strings.TrimSuffix(v.Bitrate, "k") + "000"
-		lines = append(lines, fmt.Sprintf("#EXT-X-STREAM-INF:BANDWIDTH=%s,RESOLUTION=1280x%d", bw, v.Height))
+		encH := v.Height
+		if src.Height > 0 && src.Height < encH {
+			encH = src.Height
+		}
+		if encH%2 != 0 {
+			encH--
+		}
+		encW := encodedWidth(encH, src)
+
+		videoBps := parseBitrateString(EncodeBitrate(v, src))
+		avgBps := videoBps + audioBitrateBps
+		// Peak allowance over the average target for VBV headroom.
+		peakBps := int64(float64(videoBps)*1.2) + audioBitrateBps
+
+		codecs := h264AudioCodecs(encW, encH, src.FPS)
+		lines = append(lines, fmt.Sprintf(
+			"#EXT-X-STREAM-INF:BANDWIDTH=%d,AVERAGE-BANDWIDTH=%d,RESOLUTION=%dx%d,CODECS=\"%s\"",
+			peakBps, avgBps, encW, encH, codecs,
+		))
 		lines = append(lines, v.Name+"/index.m3u8")
 	}
 	master := filepath.Join(outDir, "master.m3u8")
 	return os.WriteFile(master, []byte(strings.Join(lines, "\n")+"\n"), 0o640)
+}
+
+// encodedWidth derives the even output width for a target height, preserving the source aspect
+// ratio (falls back to 16:9 when the source dimensions are unknown). Mirrors scaleVF(-2:height).
+func encodedWidth(height int, src SourceProfile) int {
+	num, den := src.Width, src.Height
+	if num <= 0 || den <= 0 {
+		num, den = 16, 9
+	}
+	w := int(float64(height)*float64(num)/float64(den) + 0.5)
+	if w%2 != 0 {
+		w--
+	}
+	if w < 2 {
+		w = 2
+	}
+	return w
+}
+
+// h264LevelIDC returns the H.264 level_idc (decimal, e.g. 40 for 4.0) needed for the given
+// frame size and frame rate, using the standard MaxFS / MaxMBPS limits.
+func h264LevelIDC(width, height int, fps float64) int {
+	if fps <= 0 {
+		fps = 30
+	}
+	mbW := (width + 15) / 16
+	mbH := (height + 15) / 16
+	mbFrame := mbW * mbH
+	mbps := float64(mbFrame) * fps
+	levels := []struct {
+		idc     int
+		maxMBPS float64
+		maxFS   int
+	}{
+		{30, 40500, 1620},
+		{31, 108000, 3600},
+		{32, 216000, 5120},
+		{40, 245760, 8192},
+		{42, 522240, 8704},
+		{50, 589824, 22080},
+		{51, 983040, 36864},
+	}
+	for _, l := range levels {
+		if mbFrame <= l.maxFS && mbps <= l.maxMBPS {
+			return l.idc
+		}
+	}
+	return 51
+}
+
+func h264LevelString(width, height int, fps float64) string {
+	idc := h264LevelIDC(width, height, fps)
+	return fmt.Sprintf("%d.%d", idc/10, idc%10)
+}
+
+// h264AudioCodecs returns the RFC 6381 CODECS attribute for High-profile H.264 + AAC-LC,
+// matching the pinned encoder profile/level.
+func h264AudioCodecs(width, height int, fps float64) string {
+	idc := h264LevelIDC(width, height, fps)
+	return fmt.Sprintf("avc1.6400%02x,mp4a.40.2", idc)
 }
 
 // ValidateHLSOutput checks master and at least one segment exist.

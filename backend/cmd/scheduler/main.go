@@ -69,7 +69,7 @@ func main() {
 	thumbnailSvc := service.NewThumbnailService(mediaRepo, store)
 	mediaSvc := service.NewMediaObjectService(mediaRepo, settingsSvc, authzSvc, auditRepo, store, storageCleanup, thumbnailSvc)
 	uploadLimiter := upload.NewRateLimiter(redisClient, cfg.UploadInitPerMinute)
-	uploadSvc := service.NewUploadService(uploadRepo, mediaSvc, pool, store, thumbnailSvc, uploadLimiter, cfg.MaxPendingUploadsPerUser)
+	uploadSvc := service.NewUploadService(uploadRepo, mediaSvc, pool, store, thumbnailSvc, uploadLimiter, cfg.MaxPendingUploadsPerUser, cfg.PresignedPutURLTTL)
 
 	sched := &background.Scheduler{
 		Log:            logger,

@@ -1,8 +1,10 @@
 package handler
 
 import (
+	"github.com/anhtuanlc/mediahub/internal/integration"
 	"github.com/anhtuanlc/mediahub/internal/middleware"
 	"github.com/anhtuanlc/mediahub/internal/observability"
+	"github.com/anhtuanlc/mediahub/internal/service"
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 )
@@ -23,6 +25,12 @@ type RouterDeps struct {
 	Videos      *VideoHandler
 	APIKeys     *APIKeyHandler
 	Stream      *StreamHandler
+	Integration *IntegrationV1Handler
+	Assets      *AssetDeliveryHandler
+	Embed       *EmbedHandler
+	OEmbed      *OEmbedHandler
+	Webhooks    *WebhookHandler
+	APIKeySvc   *service.APIKeyService
 	Password    *PasswordTransport
 	AuthMW      *middleware.AuthMiddleware
 	AppURL          string
@@ -117,6 +125,11 @@ func NewRouter(deps RouterDeps) *gin.Engine {
 					owner.PATCH("/api-keys/:public_id", deps.APIKeys.Patch)
 					owner.DELETE("/api-keys/:public_id", deps.APIKeys.Delete)
 				}
+				if deps.Webhooks != nil {
+					owner.GET("/webhooks", deps.Webhooks.List)
+					owner.POST("/webhooks", deps.Webhooks.Create)
+					owner.DELETE("/webhooks/:public_id", deps.Webhooks.Delete)
+				}
 			}
 
 			protected.GET("/objects", deps.Objects.List)
@@ -142,6 +155,7 @@ func NewRouter(deps RouterDeps) *gin.Engine {
 				protected.GET("/videos", deps.Videos.List)
 				protected.GET("/videos/:public_id", deps.Videos.Get)
 				protected.POST("/videos/:public_id/convert", deps.Videos.Convert)
+				protected.POST("/videos/:public_id/convert/retry", deps.Videos.RetryConvert)
 				protected.GET("/videos/:public_id/hls", deps.Videos.GetHLS)
 				protected.DELETE("/videos/:public_id/hls", deps.Videos.DeleteHLS)
 				protected.GET("/videos/:public_id/stream-policy", deps.Videos.GetStreamPolicy)
@@ -154,6 +168,58 @@ func NewRouter(deps RouterDeps) *gin.Engine {
 		stream := r.Group("/stream")
 		{
 			stream.GET("/:video_public_id/*filepath", deps.Stream.Serve)
+		}
+	}
+
+	if deps.Assets != nil {
+		assets := r.Group("")
+		assets.Use(observability.IntegrationMetricsMiddleware())
+		assets.GET("/assets/:object_id/:variant", deps.Assets.Serve)
+	}
+	if deps.Embed != nil {
+		r.GET("/embed/:video_id", deps.Embed.Serve)
+	}
+	if deps.OEmbed != nil {
+		r.GET("/oembed", deps.OEmbed.Serve)
+	}
+
+	if deps.Integration != nil && deps.APIKeySvc != nil {
+		v1 := r.Group("/api/v1")
+		v1.Use(observability.IntegrationMetricsMiddleware())
+		{
+			media := v1.Group("/media")
+			{
+				upload := media.Group("/upload")
+				upload.Use(middleware.RequireAPIKey(deps.APIKeySvc, integration.ScopeMediaUpload))
+				{
+					upload.GET("/limits", deps.Integration.UploadLimits)
+					upload.POST("/init", deps.Integration.UploadInit)
+					upload.PUT("/:session_id/chunks/:index", deps.Integration.UploadChunk)
+					upload.POST("/:session_id/complete", deps.Integration.UploadComplete)
+					upload.DELETE("/:session_id", deps.Integration.UploadAbort)
+				}
+
+				read := media.Group("")
+				read.Use(middleware.RequireAPIKey(deps.APIKeySvc, integration.ScopeMediaRead))
+				{
+					read.POST("/delivery-urls", deps.Integration.DeliveryURLs)
+					read.GET("/:public_id/hls", deps.Integration.GetHLS)
+					read.GET("/:public_id", deps.Integration.GetMedia)
+				}
+
+				convert := media.Group("")
+				convert.Use(middleware.RequireAPIKey(deps.APIKeySvc, integration.ScopeMediaConvert))
+				{
+					convert.POST("/:public_id/convert", deps.Integration.Convert)
+					convert.POST("/:public_id/convert/retry", deps.Integration.RetryConvert)
+				}
+
+				del := media.Group("")
+				del.Use(middleware.RequireAPIKey(deps.APIKeySvc, integration.ScopeMediaDelete))
+				{
+					del.DELETE("/:public_id", deps.Integration.DeleteMedia)
+				}
+			}
 		}
 	}
 

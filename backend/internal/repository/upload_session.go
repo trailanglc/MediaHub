@@ -56,7 +56,7 @@ type CreateUploadSessionInput struct {
 	TotalSize       int64
 	ChunkSize       int
 	StoragePrefix   string
-	S3UploadID      string
+	S3UploadID      *string
 	FinalStorageKey string
 	ExpiresAt       time.Time
 }

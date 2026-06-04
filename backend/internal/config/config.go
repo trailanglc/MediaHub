@@ -19,6 +19,7 @@ type Config struct {
 	AppEnv        string
 	AppURL        string
 	APIPublicURL  string
+	CDNPublicURL  string
 	APIAddr       string
 
 	DBDSN     string
@@ -45,6 +46,20 @@ type Config struct {
 	ConvertMinConcurrent int
 	ConvertJobTimeout    time.Duration
 	StreamRateLimitPerMin int
+	// StreamSegmentRateLimitPerMin caps origin segment fetches per IP/video per minute
+	// (fails open: never blocks playback on Redis errors). 0 derives 10x the playlist limit.
+	StreamSegmentRateLimitPerMin int
+	// StreamSegmentURLTTL is the rolling window for shared, edge-cacheable signed segment URLs.
+	StreamSegmentURLTTL time.Duration
+	// AssetDeliveryURLTTL is the rolling window for signed image/thumbnail/embed delivery URLs.
+	AssetDeliveryURLTTL time.Duration
+	// PresignedPutURLTTL is the validity window for direct PUT upload URLs.
+	PresignedPutURLTTL time.Duration
+	// ImageTransformCacheTTL caches on-the-fly resized images in Redis.
+	ImageTransformCacheTTL time.Duration
+	// StreamInternalRedirectPrefix, when set, makes the API emit X-Accel-Redirect for segments
+	// so an internal nginx location streams bytes directly from object storage (Go does no I/O).
+	StreamInternalRedirectPrefix string
 
 	// RedisFailClosed: when true (production/staging), Redis errors deny login lockout checks and stream rate limits.
 	RedisFailClosed bool
@@ -57,6 +72,8 @@ type Config struct {
 
 	UploadInitPerMinute      int
 	MaxPendingUploadsPerUser int
+	APIKeyUploadInitPerMin   int
+	APIKeyConvertPerHour     int
 
 	// Resource governor: adaptive limits from host/Redis idle %.
 	ResourceGovernorEnabled     bool
@@ -84,6 +101,7 @@ func Load() (*Config, error) {
 		AppEnv:              getEnv("APP_ENV", "development"),
 		AppURL:              getEnv("APP_URL", "http://localhost:3000"),
 		APIPublicURL:        getEnv("API_PUBLIC_URL", "http://localhost:8080"),
+		CDNPublicURL:        strings.TrimRight(strings.TrimSpace(os.Getenv("CDN_PUBLIC_URL")), "/"),
 		APIAddr:             getEnv("API_ADDR", ":8080"),
 		DBDSN:               os.Getenv("DB_DSN"),
 		RedisAddr:           getEnv("REDIS_ADDR", "localhost:6379"),
@@ -106,9 +124,17 @@ func Load() (*Config, error) {
 		ConvertMinConcurrent:  getEnvInt("CONVERT_MIN_CONCURRENT", 1),
 		ConvertJobTimeout:     getEnvDuration("CONVERT_JOB_TIMEOUT", 2*time.Hour),
 		StreamRateLimitPerMin: getEnvInt("STREAM_RATE_LIMIT_PER_MIN", 120),
+		StreamSegmentRateLimitPerMin: getEnvInt("STREAM_SEGMENT_RATE_LIMIT_PER_MIN", 0),
+		StreamSegmentURLTTL:          getEnvDuration("STREAM_SEGMENT_URL_TTL", time.Hour),
+		AssetDeliveryURLTTL:          getEnvDuration("ASSET_DELIVERY_URL_TTL", 24*time.Hour),
+		PresignedPutURLTTL:           getEnvDuration("PRESIGNED_PUT_URL_TTL", time.Hour),
+		ImageTransformCacheTTL:       getEnvDuration("IMAGE_TRANSFORM_CACHE_TTL", 24*time.Hour),
+		StreamInternalRedirectPrefix: strings.TrimRight(os.Getenv("STREAM_INTERNAL_REDIRECT_PREFIX"), "/"),
 		HealthMetricsCacheTTL: defaultHealthMetricsCacheTTL,
 		UploadInitPerMinute:      getEnvInt("UPLOAD_INIT_PER_MINUTE", 60),
 		MaxPendingUploadsPerUser: getEnvInt("UPLOAD_MAX_PENDING_PER_USER", 10),
+		APIKeyUploadInitPerMin:   getEnvInt("API_KEY_UPLOAD_INIT_PER_MIN", 120),
+		APIKeyConvertPerHour:     getEnvInt("API_KEY_CONVERT_PER_HOUR", 60),
 		ResourceGovernorEnabled:     getEnvBool("RESOURCE_GOVERNOR_ENABLED", true),
 		ResourceSampleInterval:      getEnvDuration("RESOURCE_SAMPLE_INTERVAL", 10*time.Second),
 		ResourceCPUReservePercent:   getEnvInt("RESOURCE_CPU_RESERVE_PERCENT", 40),
@@ -153,6 +179,18 @@ func Load() (*Config, error) {
 	cfg.TrustedProxies = parseTrustedProxies(os.Getenv("TRUSTED_PROXIES"))
 
 	return cfg, nil
+}
+
+// DeliveryBaseURL returns the public origin used in signed asset/embed URLs.
+// CDN_PUBLIC_URL overrides API_PUBLIC_URL when set (nginx/CDN in front of /assets and /embed).
+func (c *Config) DeliveryBaseURL() string {
+	if c == nil {
+		return "http://localhost:8080"
+	}
+	if c.CDNPublicURL != "" {
+		return c.CDNPublicURL
+	}
+	return strings.TrimRight(strings.TrimSpace(c.APIPublicURL), "/")
 }
 
 func parseTrustedProxies(raw string) []string {

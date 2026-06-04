@@ -22,8 +22,8 @@ type GlobalDomainsProvider func(ctx context.Context) ([]string, error)
 
 // StreamLoader loads and caches stream context per video public id.
 type StreamLoader struct {
-	Store    *Store
-	Videos   *repository.VideoRepository
+	Store         *Store
+	Videos        *repository.VideoRepository
 	GlobalDomains GlobalDomainsProvider
 }
 
@@ -80,6 +80,8 @@ func InvalidateStreamVideo(ctx context.Context, store *Store, videoPublicID uuid
 		return
 	}
 	_ = store.Delete(ctx, KeyStreamVideo(videoPublicID.String()))
+	// Notify all API replicas to drop per-process playlist bodies for this video.
+	store.Publish(ctx, ChannelStreamInvalidate, videoPublicID.String())
 }
 
 func InvalidateAllStreamVideos(ctx context.Context, store *Store) {

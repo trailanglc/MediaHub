@@ -663,6 +663,7 @@ export type ConvertJob = {
   public_id: string;
   status: string;
   attempts: number;
+  max_attempts: number;
   error?: string;
   started_at?: string;
   finished_at?: string;
@@ -740,6 +741,13 @@ export function convertVideo(publicId: string, input?: ConvertVideoInput) {
   });
 }
 
+export function retryConvertVideo(publicId: string, input?: ConvertVideoInput) {
+  return apiFetch<{ job: ConvertJob }>(`/api/videos/${publicId}/convert/retry`, {
+    method: "POST",
+    body: input?.variants?.length ? JSON.stringify({ variants: input.variants }) : undefined,
+  });
+}
+
 export type HLSAccessResponse = {
   master_url: string;
   embed_html: string;
@@ -776,11 +784,29 @@ export type APIKey = {
   public_id: string;
   name: string;
   scopes: string[];
-  allowed_domains: string[];
   allowed_ips: string[];
+  root_folder_public_id?: string;
   status: string;
   last_used_at?: string;
   created_at: string;
+};
+
+export const INTEGRATION_API_KEY_SCOPES = [
+  "stream",
+  "media:upload",
+  "media:read",
+  "media:convert",
+  "media:delete",
+] as const;
+
+export type IntegrationAPIKeyScope = (typeof INTEGRATION_API_KEY_SCOPES)[number];
+
+export const API_KEY_SCOPE_LABELS: Record<IntegrationAPIKeyScope, string> = {
+  stream: "Stream HLS (/stream)",
+  "media:upload": "Upload media",
+  "media:read": "Đọc metadata & delivery URLs",
+  "media:convert": "Chuyển mã video HLS",
+  "media:delete": "Xóa media",
 };
 
 export function fetchAPIKeys() {
@@ -790,11 +816,28 @@ export function fetchAPIKeys() {
 export function createAPIKey(body: {
   name: string;
   scopes?: string[];
-  allowed_domains?: string[];
   allowed_ips?: string[];
+  root_folder_public_id?: string;
 }) {
   return apiFetch<{ key: APIKey; secret: string }>("/api/api-keys", {
     method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export function patchAPIKey(
+  publicId: string,
+  body: {
+    name?: string;
+    scopes?: string[];
+    allowed_ips?: string[];
+    root_folder_public_id?: string;
+    clear_root_folder?: boolean;
+    status?: string;
+  },
+) {
+  return apiFetch<APIKey>(`/api/api-keys/${publicId}`, {
+    method: "PATCH",
     body: JSON.stringify(body),
   });
 }
@@ -809,6 +852,15 @@ export type QueueStatusResponse = {
   convert_jobs: Record<string, number>;
   video_hls: Record<string, number>;
   queue_depth: number;
+  failed_jobs?: Array<{
+    job_public_id: string;
+    video_public_id: string;
+    video_name: string;
+    attempts: number;
+    max_attempts: number;
+    error?: string;
+    finished_at?: string;
+  }>;
   media_objects?: {
     total: number;
     folders: number;

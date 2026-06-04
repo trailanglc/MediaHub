@@ -13,9 +13,9 @@ import (
 	"github.com/anhtuanlc/mediahub/internal/authz"
 	"github.com/anhtuanlc/mediahub/internal/middleware"
 	"github.com/anhtuanlc/mediahub/internal/platform/rediscache"
+	streamplat "github.com/anhtuanlc/mediahub/internal/platform/stream"
 	"github.com/anhtuanlc/mediahub/internal/service"
 	"github.com/anhtuanlc/mediahub/internal/storage"
-	streamplat "github.com/anhtuanlc/mediahub/internal/platform/stream"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 )
@@ -27,17 +27,30 @@ const (
 )
 
 type StreamHandler struct {
-	streamLoader  *rediscache.StreamLoader
-	streamTok     *service.StreamTokenService
-	store         storage.ObjectStorage
-	apiKeys       *service.APIKeyService
-	metrics       *streamplat.Metrics
-	rateLimiter   *streamplat.RateLimiter
-	playlistCache *playlistBodyCache
-	appURL        string
-	cookieSecure  bool
-	authMW        *middleware.AuthMiddleware
-	authz         *authz.Service
+	streamLoader     *rediscache.StreamLoader
+	streamTok        *service.StreamTokenService
+	store            storage.ObjectStorage
+	apiKeys          *service.APIKeyService
+	integration      *service.IntegrationService
+	metrics          *streamplat.Metrics
+	rateLimiter      *streamplat.RateLimiter
+	playlistCache    *playlistBodyCache
+	appURL           string
+	cookieSecure     bool
+	authMW           *middleware.AuthMiddleware
+	authz            *authz.Service
+	segmentURLWindow time.Duration
+	internalRedirect string
+}
+
+// StreamHandlerOptions carries optional performance tuning for HLS delivery.
+type StreamHandlerOptions struct {
+	// SegmentURLWindow is the rolling validity window for shared, edge-cacheable signed
+	// segment URLs. Zero falls back to one hour.
+	SegmentURLWindow time.Duration
+	// InternalRedirectPrefix, when non-empty, makes segment responses emit X-Accel-Redirect
+	// to an internal nginx location instead of streaming bytes through the API.
+	InternalRedirectPrefix string
 }
 
 func NewStreamHandler(
@@ -45,27 +58,45 @@ func NewStreamHandler(
 	streamTok *service.StreamTokenService,
 	store storage.ObjectStorage,
 	apiKeys *service.APIKeyService,
+	integrationSvc *service.IntegrationService,
 	metrics *streamplat.Metrics,
 	rateLimiter *streamplat.RateLimiter,
 	appURL string,
 	appEnv string,
 	authMW *middleware.AuthMiddleware,
 	authzSvc *authz.Service,
+	opts StreamHandlerOptions,
 ) *StreamHandler {
 	secure := appEnv == "production" || appEnv == "staging"
-	return &StreamHandler{
-		streamLoader:  streamLoader,
-		streamTok:     streamTok,
-		store:         store,
-		apiKeys:       apiKeys,
-		metrics:       metrics,
-		rateLimiter:   rateLimiter,
-		playlistCache: newPlaylistBodyCache(),
-		appURL:        strings.TrimSpace(appURL),
-		cookieSecure:  secure,
-		authMW:        authMW,
-		authz:         authzSvc,
+	window := opts.SegmentURLWindow
+	if window <= 0 {
+		window = time.Hour
 	}
+	pc := newPlaylistBodyCache()
+	h := &StreamHandler{
+		streamLoader:     streamLoader,
+		streamTok:        streamTok,
+		store:            store,
+		apiKeys:          apiKeys,
+		integration:      integrationSvc,
+		metrics:          metrics,
+		rateLimiter:      rateLimiter,
+		playlistCache:    pc,
+		appURL:           strings.TrimSpace(appURL),
+		cookieSecure:     secure,
+		authMW:           authMW,
+		authz:            authzSvc,
+		segmentURLWindow: window,
+		internalRedirect: strings.TrimRight(strings.TrimSpace(opts.InternalRedirectPrefix), "/"),
+	}
+	// Drop per-process playlist bodies when any replica invalidates a video (re-convert,
+	// HLS delete, policy change), so a load-balanced fleet never serves a stale manifest.
+	if streamLoader != nil && streamLoader.Store != nil {
+		streamLoader.Store.Subscribe(context.Background(), rediscache.ChannelStreamInvalidate, func(videoID string) {
+			pc.InvalidateVideo(videoID)
+		})
+	}
+	return h
 }
 
 func isHLSPlaylistPath(filePath string) bool {
@@ -91,6 +122,23 @@ func (h *StreamHandler) Serve(c *gin.Context) {
 	}
 
 	isPlaylist := isHLSPlaylistPath(filePath)
+	storageKey := storage.HLSPrefix(videoPID) + filePath
+
+	// Fast path: segments carrying a valid shared signature are authorized without a Redis
+	// lookup, cookie, or origin check. They get a stable (cookie-free) response so a CDN can
+	// cache each segment once and fan it out to every viewer.
+	if !isPlaylist {
+		if exp, _ := strconv.ParseInt(c.Query("e"), 10, 64); exp > 0 {
+			if h.streamTok.VerifySegment(videoID, c.Query("s"), exp) == nil {
+				if h.rateLimiter != nil && !h.rateLimiter.AllowSegment(c.Request.Context(), c.ClientIP(), videoID) {
+					c.JSON(http.StatusTooManyRequests, gin.H{"error": "rate_limited", "message": "too many stream requests"})
+					return
+				}
+				h.serveSegment(c, videoID, storageKey, filePath, true)
+				return
+			}
+		}
+	}
 
 	if h.streamLoader == nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal_error"})
@@ -113,10 +161,15 @@ func (h *StreamHandler) Serve(c *gin.Context) {
 			c.JSON(http.StatusForbidden, gin.H{"error": "forbidden", "message": "invalid api key"})
 			return
 		}
-		origin := requestOrigin(c)
-		if !h.apiKeys.MatchIP(c.ClientIP(), key.AllowedIPs) || !h.apiKeys.MatchDomain(key, origin) {
-			c.JSON(http.StatusForbidden, gin.H{"error": "forbidden", "message": "api key restrictions"})
+		if !h.apiKeys.CheckIPRestriction(c.ClientIP(), key) {
+			c.JSON(http.StatusForbidden, gin.H{"error": "forbidden", "message": "api key ip restriction"})
 			return
+		}
+		if h.integration != nil {
+			if err := h.integration.ObjectInNamespace(c.Request.Context(), key, sctx.ObjectID); err != nil {
+				c.JSON(http.StatusForbidden, gin.H{"error": "forbidden", "message": "api key namespace restriction"})
+				return
+			}
 		}
 	}
 
@@ -138,12 +191,15 @@ func (h *StreamHandler) Serve(c *gin.Context) {
 		}
 	}
 
-	storageKey := storage.HLSPrefix(videoPID) + filePath
 	if isPlaylist {
 		h.servePlaylist(c, videoID, filePath, storageKey, token, expUnix)
 		return
 	}
-	h.serveSegment(c, storageKey, filePath)
+	if h.rateLimiter != nil && !h.rateLimiter.AllowSegment(c.Request.Context(), c.ClientIP(), videoID) {
+		c.JSON(http.StatusTooManyRequests, gin.H{"error": "rate_limited", "message": "too many stream requests"})
+		return
+	}
+	h.serveSegment(c, videoID, storageKey, filePath, false)
 }
 
 func (h *StreamHandler) resolveSession(c *gin.Context, videoID string) (token string, expUnix int64, ok bool) {
@@ -201,91 +257,129 @@ func (h *StreamHandler) setSessionCookies(c *gin.Context, videoID, token string,
 }
 
 func (h *StreamHandler) servePlaylist(c *gin.Context, videoID, filePath, storageKey, token string, expUnix int64) {
-	if body, hit := h.playlistCache.Get(videoID, filePath); hit {
-		h.setSessionCookies(c, videoID, token, expUnix)
-		setStreamCORS(c, h.appURL)
-		c.Header("Cache-Control", "private, max-age=60")
-		h.recordAccessAsync(videoID, int64(len(body)))
-		c.Data(http.StatusOK, "application/vnd.apple.mpegurl", body)
-		return
+	body, hit := h.playlistCache.Get(videoID, filePath)
+	if !hit {
+		raw, err := h.store.GetObject(c.Request.Context(), storageKey)
+		if err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "not_found", "message": "playlist not found"})
+			return
+		}
+		defer raw.Close()
+		limited := io.LimitReader(raw, maxHLSPlaylistBytes+1)
+		data, err := io.ReadAll(limited)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "internal_error"})
+			return
+		}
+		if int64(len(data)) > maxHLSPlaylistBytes {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "validation_error", "message": "playlist too large"})
+			return
+		}
+		// Cache the rewritten body with relative, unsigned URLs. Per-window signatures are
+		// applied per response below so the cached entry stays stable across windows.
+		body = []byte(normalizePlaylistURLs(string(data), videoID, filePath))
+		h.playlistCache.Set(videoID, filePath, body)
 	}
 
-	body, err := h.store.GetObject(c.Request.Context(), storageKey)
-	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "not_found", "message": "playlist not found"})
-		return
-	}
-	defer body.Close()
-	limited := io.LimitReader(body, maxHLSPlaylistBytes+1)
-	data, err := io.ReadAll(limited)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal_error"})
-		return
-	}
-	if int64(len(data)) > maxHLSPlaylistBytes {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "validation_error", "message": "playlist too large"})
-		return
-	}
-
-	rewritten := normalizePlaylistURLs(string(data), videoID, filePath)
-	out := []byte(rewritten)
-	h.playlistCache.Set(videoID, filePath, out)
+	out := h.signPlaylistBody(videoID, body)
+	etag := weakETag(out)
 
 	h.setSessionCookies(c, videoID, token, expUnix)
 	setStreamCORS(c, h.appURL)
 	c.Header("Cache-Control", "private, max-age=60")
+	c.Header("ETag", etag)
+	if etagMatches(c.GetHeader("If-None-Match"), etag) {
+		h.recordAccessAsync(videoID, 0)
+		c.Status(http.StatusNotModified)
+		return
+	}
 	h.recordAccessAsync(videoID, int64(len(out)))
 	c.Data(http.StatusOK, "application/vnd.apple.mpegurl", out)
 }
 
-func (h *StreamHandler) serveSegment(c *gin.Context, storageKey, filePath string) {
-	setStreamCORS(c, h.appURL)
-	ctx := c.Request.Context()
-	info, err := h.store.StatObject(ctx, storageKey)
-	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "not_found", "message": "segment not found"})
-		return
+// signPlaylistBody appends a shared (per-video, per-window) signature to every segment line.
+// Variant playlist references (.m3u8) are left untouched: they stay session-authorized via Go.
+func (h *StreamHandler) signPlaylistBody(videoID string, body []byte) []byte {
+	if h.streamTok == nil {
+		return body
 	}
+	exp := service.SegmentExpiry(time.Now(), h.segmentURLWindow)
+	sig := h.streamTok.SignSegment(videoID, exp)
+	query := "e=" + strconv.FormatInt(exp, 10) + "&s=" + sig
 
-	ct := info.ContentType
-	if ct == "" {
-		ct = streamContentType(filePath)
-	}
-	setImmutableCacheHeaders(c.Writer.Header(), info.ETag)
-
-	rangeHeader := c.GetHeader("Range")
-	if rangeHeader == "" {
-		body, _, err := h.store.GetObjectRange(ctx, storageKey, 0, -1)
-		if err != nil {
-			c.JSON(http.StatusNotFound, gin.H{"error": "not_found", "message": "segment not found"})
-			return
+	lines := strings.Split(string(body), "\n")
+	changed := false
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
 		}
-		defer body.Close()
-		c.Header("Content-Type", ct)
-		c.Header("Content-Length", strconv.FormatInt(info.Size, 10))
+		if strings.HasSuffix(strings.ToLower(strings.Split(trimmed, "?")[0]), ".m3u8") {
+			continue
+		}
+		sep := "?"
+		if strings.Contains(line, "?") {
+			sep = "&"
+		}
+		lines[i] = line + sep + query
+		changed = true
+	}
+	if !changed {
+		return body
+	}
+	return []byte(strings.Join(lines, "\n"))
+}
+
+func (h *StreamHandler) serveSegment(c *gin.Context, videoID, storageKey, filePath string, cacheable bool) {
+	if cacheable {
+		setSegmentPublicCORS(c)
+	} else {
+		setStreamCORS(c, h.appURL)
+	}
+	ct := streamContentType(filePath)
+
+	// Offload byte delivery to nginx (which streams directly from object storage) so the API
+	// never touches segment bytes. The edge still caches the response by its shared signed URL.
+	if h.internalRedirect != "" {
+		hdr := c.Writer.Header()
+		hdr.Set("Cache-Control", "public, max-age=31536000, immutable")
+		hdr.Set("Accept-Ranges", "bytes")
+		hdr.Set("Content-Type", ct)
+		hdr.Set("X-Accel-Redirect", h.internalRedirect+"/"+storageKey)
+		h.recordAccessAsync(videoID, 0)
 		c.Status(http.StatusOK)
-		_, _ = io.Copy(c.Writer, body)
 		return
 	}
 
-	start, end, ok := parseByteRange(rangeHeader, info.Size)
-	if !ok {
-		c.Header("Content-Range", "bytes */"+strconv.FormatInt(info.Size, 10))
-		c.Status(http.StatusRequestedRangeNotSatisfiable)
-		return
-	}
-	length := end - start + 1
-	body, _, err := h.store.GetObjectRange(ctx, storageKey, start, length)
+	ctx := c.Request.Context()
+	rangeHeader := c.GetHeader("Range")
+	body, info, err := h.store.GetRange(ctx, storageKey, rangeHeader)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "not_found", "message": "segment not found"})
 		return
 	}
 	defer body.Close()
+
+	if info.ContentType != "" {
+		ct = info.ContentType
+	}
+	setImmutableCacheHeaders(c.Writer.Header(), info.ETag)
+
+	if info.ETag != "" && etagMatches(c.GetHeader("If-None-Match"), "\""+info.ETag+"\"") {
+		c.Status(http.StatusNotModified)
+		return
+	}
+
 	c.Header("Content-Type", ct)
-	c.Header("Content-Length", strconv.FormatInt(length, 10))
-	c.Header("Content-Range", "bytes "+strconv.FormatInt(start, 10)+"-"+strconv.FormatInt(end, 10)+"/"+strconv.FormatInt(info.Size, 10))
-	c.Status(http.StatusPartialContent)
+	c.Header("Content-Length", strconv.FormatInt(info.Size, 10))
+	if info.ContentRange != "" {
+		c.Header("Content-Range", info.ContentRange)
+		c.Status(http.StatusPartialContent)
+	} else {
+		c.Status(http.StatusOK)
+	}
 	_, _ = io.Copy(c.Writer, body)
+	h.recordAccessAsync(videoID, info.Size)
 }
 
 func (h *StreamHandler) recordAccessAsync(videoID string, bytes int64) {
@@ -357,6 +451,25 @@ func setStreamCORS(c *gin.Context, appURL string) {
 	}
 	c.Header("Access-Control-Allow-Credentials", "true")
 	c.Header("Access-Control-Expose-Headers", "Content-Length, Content-Type, Content-Range")
+}
+
+// setSegmentPublicCORS emits cookie-free CORS for signed segments. The body is identical for
+// every viewer (authorized purely by the shared URL signature), so the response is cacheable at
+// the edge. We echo the request Origin (with credentials) when present so credentialed players
+// such as Safari native HLS keep working; only the ACAO header varies by Origin (Vary: Origin),
+// not the body. When there is no Origin (e.g. native media fetches), we allow any origin.
+func setSegmentPublicCORS(c *gin.Context) {
+	origin := c.GetHeader("Origin")
+	if origin != "" {
+		c.Header("Access-Control-Allow-Origin", origin)
+		c.Header("Access-Control-Allow-Credentials", "true")
+		c.Header("Vary", "Origin")
+	} else {
+		c.Header("Access-Control-Allow-Origin", "*")
+	}
+	c.Header("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS")
+	c.Header("Access-Control-Allow-Headers", "Range")
+	c.Header("Access-Control-Expose-Headers", "Content-Length, Content-Type, Content-Range, Accept-Ranges")
 }
 
 func sanitizeStreamFilePath(filePath, videoID string) (string, bool) {

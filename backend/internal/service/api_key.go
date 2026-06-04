@@ -5,45 +5,92 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"errors"
+
 	"github.com/anhtuanlc/mediahub/internal/auth"
+	"github.com/anhtuanlc/mediahub/internal/integration"
 	"github.com/anhtuanlc/mediahub/internal/repository"
 	"github.com/google/uuid"
 )
 
 var (
-	ErrAPIKeyAccessDenied = errors.New("api key access denied")
-	ErrAPIKeyInvalid      = errors.New("invalid api key")
+	ErrAPIKeyAccessDenied    = errors.New("api key access denied")
+	ErrAPIKeyInvalid         = errors.New("invalid api key")
+	ErrAPIKeyInvalidScope    = errors.New("invalid api key scope")
+	ErrAPIKeyInvalidStatus   = errors.New("invalid api key status")
+	ErrAPIKeyInvalidRootFolder = errors.New("invalid root folder")
 )
 
 type APIKeyDTO struct {
-	PublicID       string   `json:"public_id"`
-	Name           string   `json:"name"`
-	Scopes         []string `json:"scopes"`
-	AllowedDomains []string `json:"allowed_domains"`
-	AllowedIPs     []string `json:"allowed_ips"`
-	Status         string   `json:"status"`
-	LastUsedAt     *string  `json:"last_used_at,omitempty"`
-	CreatedAt      string   `json:"created_at"`
+	PublicID           string   `json:"public_id"`
+	Name               string   `json:"name"`
+	Scopes             []string `json:"scopes"`
+	AllowedIPs         []string `json:"allowed_ips"`
+	RootFolderPublicID *string  `json:"root_folder_public_id,omitempty"`
+	Status             string   `json:"status"`
+	LastUsedAt         *string  `json:"last_used_at,omitempty"`
+	CreatedAt          string   `json:"created_at"`
 }
 
 type APIKeyService struct {
-	keys  *repository.APIKeyRepository
-	audit *repository.AuditRepository
+	keys    *repository.APIKeyRepository
+	audit   *repository.AuditRepository
+	objects *repository.MediaObjectRepository
 }
 
-func NewAPIKeyService(keys *repository.APIKeyRepository, audit *repository.AuditRepository) *APIKeyService {
-	return &APIKeyService{keys: keys, audit: audit}
+func NewAPIKeyService(keys *repository.APIKeyRepository, audit *repository.AuditRepository, objects *repository.MediaObjectRepository) *APIKeyService {
+	return &APIKeyService{keys: keys, audit: audit, objects: objects}
+}
+
+func validateScopes(scopes []string) error {
+	if len(scopes) == 0 {
+		return ErrAPIKeyInvalidScope
+	}
+	for _, sc := range scopes {
+		if !integration.HasScope(integration.KnownScopes, sc) {
+			return ErrAPIKeyInvalidScope
+		}
+	}
+	return nil
+}
+
+func validateAPIKeyStatus(status string) error {
+	switch status {
+	case "active", "revoked":
+		return nil
+	default:
+		return ErrAPIKeyInvalidStatus
+	}
+}
+
+func (s *APIKeyService) validateRootFolder(ctx context.Context, pid *uuid.UUID) error {
+	if pid == nil || s.objects == nil {
+		return nil
+	}
+	obj, err := s.objects.GetByPublicID(ctx, *pid)
+	if err != nil {
+		if errors.Is(err, repository.ErrMediaObjectNotFound) {
+			return ErrAPIKeyInvalidRootFolder
+		}
+		return err
+	}
+	if obj.Type != "folder" {
+		return ErrAPIKeyInvalidRootFolder
+	}
+	return nil
 }
 
 func toAPIKeyDTO(k *repository.APIKey) APIKeyDTO {
 	dto := APIKeyDTO{
-		PublicID:       k.PublicID.String(),
-		Name:           k.Name,
-		Scopes:         k.Scopes,
-		AllowedDomains: k.AllowedDomains,
-		AllowedIPs:     k.AllowedIPs,
-		Status:         k.Status,
-		CreatedAt:      k.CreatedAt.UTC().Format("2006-01-02T15:04:05Z"),
+		PublicID:   k.PublicID.String(),
+		Name:       k.Name,
+		Scopes:     k.Scopes,
+		AllowedIPs: k.AllowedIPs,
+		Status:     k.Status,
+		CreatedAt:  k.CreatedAt.UTC().Format("2006-01-02T15:04:05Z"),
+	}
+	if k.RootFolderPublicID != nil {
+		s := k.RootFolderPublicID.String()
+		dto.RootFolderPublicID = &s
 	}
 	if k.LastUsedAt != nil {
 		s := k.LastUsedAt.UTC().Format("2006-01-02T15:04:05Z")
@@ -53,10 +100,10 @@ func toAPIKeyDTO(k *repository.APIKey) APIKeyDTO {
 }
 
 type CreateAPIKeyInput struct {
-	Name           string
-	Scopes         []string
-	AllowedDomains []string
-	AllowedIPs     []string
+	Name               string
+	Scopes             []string
+	AllowedIPs         []string
+	RootFolderPublicID *uuid.UUID
 }
 
 type CreateAPIKeyResult struct {
@@ -85,9 +132,14 @@ func (s *APIKeyService) Create(ctx context.Context, createdBy int64, ip, ua stri
 	hash := auth.HashToken(plain)
 	scopes := in.Scopes
 	if len(scopes) == 0 {
-		scopes = []string{"stream"}
+		scopes = []string{integration.ScopeStream}
+	} else if err := validateScopes(scopes); err != nil {
+		return nil, err
 	}
-	k, err := s.keys.Create(ctx, uuid.New(), in.Name, hash, scopes, in.AllowedDomains, in.AllowedIPs, createdBy)
+	if err := s.validateRootFolder(ctx, in.RootFolderPublicID); err != nil {
+		return nil, err
+	}
+	k, err := s.keys.Create(ctx, uuid.New(), in.Name, hash, scopes, in.AllowedIPs, in.RootFolderPublicID, createdBy)
 	if err != nil {
 		return nil, err
 	}
@@ -109,11 +161,28 @@ func (s *APIKeyService) Revoke(ctx context.Context, actorID int64, ip, ua string
 	return nil
 }
 
-func (s *APIKeyService) Update(ctx context.Context, publicID uuid.UUID, name *string, scopes, domains, ips []string, status *string) (*APIKeyDTO, error) {
-	k, err := s.keys.Update(ctx, publicID, name, scopes, domains, ips, status)
+func (s *APIKeyService) Update(ctx context.Context, actorID int64, ip, ua string, publicID uuid.UUID, name *string, scopes, ips []string, rootFolderPublicID **uuid.UUID, status *string) (*APIKeyDTO, error) {
+	if scopes != nil {
+		if err := validateScopes(scopes); err != nil {
+			return nil, err
+		}
+	}
+	if status != nil {
+		if err := validateAPIKeyStatus(*status); err != nil {
+			return nil, err
+		}
+	}
+	if rootFolderPublicID != nil && *rootFolderPublicID != nil {
+		if err := s.validateRootFolder(ctx, *rootFolderPublicID); err != nil {
+			return nil, err
+		}
+	}
+	k, err := s.keys.Update(ctx, publicID, name, scopes, ips, rootFolderPublicID, status)
 	if err != nil {
 		return nil, err
 	}
+	aid := actorID
+	_ = s.audit.Log(ctx, &aid, "api_key.update", "api_key", &k.ID, ip, ua, map[string]string{"public_id": k.PublicID.String()})
 	dto := toAPIKeyDTO(k)
 	return &dto, nil
 }
@@ -158,6 +227,7 @@ func (s *APIKeyService) MatchIP(clientIP string, allowed []string) bool {
 	return false
 }
 
-func (s *APIKeyService) MatchDomain(k *repository.APIKey, origin string) bool {
-	return MatchDomainAllowlist(origin, k.AllowedDomains, nil)
+// CheckIPRestriction enforces IP allowlist (empty list = no restriction).
+func (s *APIKeyService) CheckIPRestriction(clientIP string, key *repository.APIKey) bool {
+	return s.MatchIP(clientIP, key.AllowedIPs)
 }

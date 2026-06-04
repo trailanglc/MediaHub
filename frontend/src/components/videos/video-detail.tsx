@@ -8,6 +8,7 @@ import {
   fetchVideo,
   fetchVideoHLS,
   patchStreamPolicy,
+  retryConvertVideo,
   VIDEOS_QUERY_KEY,
   type HLSStatus,
 } from "@/lib/api/api-client";
@@ -97,15 +98,31 @@ export function VideoDetail({ id }: { id: string }) {
     queryKey: [VIDEOS_QUERY_KEY, id, "hls"],
     queryFn: () => fetchVideoHLS(id),
     enabled: hlsReady && !!video?.capabilities.stream,
-    staleTime: Infinity,
+    // Refresh the stream token before it expires so the session cookie is renewed and a
+    // mid-playback level switch (which reloads a variant playlist) never hits a 403.
+    refetchInterval: (q) => {
+      const expiresAt = q.state.data?.expires_at;
+      if (!expiresAt) return false;
+      const msLeft = expiresAt * 1000 - Date.now();
+      const refreshIn = Math.floor(msLeft * 0.8);
+      return refreshIn > 10_000 ? refreshIn : 10_000;
+    },
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
   });
 
   const convertMut = useMutation({
-    mutationFn: () => convertVideo(id, { variants: [...selectedVariants] }),
+    mutationFn: () => {
+      const fn =
+        video?.hls_status === "failed" ? retryConvertVideo : convertVideo;
+      return fn(id, { variants: [...selectedVariants] });
+    },
     onSuccess: () => {
-      toast.success("Đã bắt đầu chuyển mã HLS");
+      toast.success(
+        video?.hls_status === "failed"
+          ? "Đã thử lại chuyển mã HLS"
+          : "Đã bắt đầu chuyển mã HLS",
+      );
       void qc.invalidateQueries({ queryKey: [VIDEOS_QUERY_KEY, id] });
     },
     onError: (e: Error) => toast.error(e.message),
@@ -296,7 +313,9 @@ export function VideoDetail({ id }: { id: string }) {
                     {convertMut.isPending && (
                       <Loader2Icon className="mr-2 size-4 animate-spin" />
                     )}
-                    Convert sang HLS
+                    {video.hls_status === "failed"
+                      ? "Thử lại chuyển mã"
+                      : "Convert sang HLS"}
                     {selectedVariants.length > 0
                       ? ` (${selectedVariants.join(", ")})`
                       : ""}

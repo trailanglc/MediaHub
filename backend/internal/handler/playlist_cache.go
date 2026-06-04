@@ -1,17 +1,22 @@
 package handler
 
 import (
+	"sort"
 	"strings"
 	"sync"
 	"time"
 )
 
-const playlistCacheTTL = 60 * time.Second
+const (
+	playlistCacheTTL        = 60 * time.Second
+	playlistCacheMaxEntries = 4096
+)
 
 type playlistBodyCache struct {
-	ttl time.Duration
-	mu  sync.RWMutex
-	m   map[string]playlistCacheEntry
+	ttl        time.Duration
+	maxEntries int
+	mu         sync.RWMutex
+	m          map[string]playlistCacheEntry
 }
 
 type playlistCacheEntry struct {
@@ -21,8 +26,9 @@ type playlistCacheEntry struct {
 
 func newPlaylistBodyCache() *playlistBodyCache {
 	return &playlistBodyCache{
-		ttl: playlistCacheTTL,
-		m:   make(map[string]playlistCacheEntry),
+		ttl:        playlistCacheTTL,
+		maxEntries: playlistCacheMaxEntries,
+		m:          make(map[string]playlistCacheEntry),
 	}
 }
 
@@ -46,8 +52,30 @@ func (c *playlistBodyCache) Set(videoID, path string, body []byte) {
 	dup := make([]byte, len(body))
 	copy(dup, body)
 	c.mu.Lock()
+	if c.maxEntries > 0 && len(c.m) >= c.maxEntries {
+		if _, exists := c.m[key]; !exists {
+			c.evictOldestLocked()
+		}
+	}
 	c.m[key] = playlistCacheEntry{body: dup, at: time.Now()}
 	c.mu.Unlock()
+}
+
+// evictOldestLocked drops the oldest ~10% of entries to bound memory. Caller holds the lock.
+func (c *playlistBodyCache) evictOldestLocked() {
+	type kv struct {
+		key string
+		at  time.Time
+	}
+	entries := make([]kv, 0, len(c.m))
+	for k, v := range c.m {
+		entries = append(entries, kv{k, v.at})
+	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].at.Before(entries[j].at) })
+	drop := len(entries)/10 + 1
+	for i := 0; i < drop && i < len(entries); i++ {
+		delete(c.m, entries[i].key)
+	}
 }
 
 func (c *playlistBodyCache) InvalidateVideo(videoID string) {

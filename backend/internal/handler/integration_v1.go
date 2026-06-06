@@ -211,6 +211,24 @@ func (h *IntegrationV1Handler) RetryConvert(c *gin.Context) {
 	c.JSON(http.StatusAccepted, gin.H{"job": job})
 }
 
+func (h *IntegrationV1Handler) CancelConvert(c *gin.Context) {
+	key, ok := middleware.GetAPIKey(c)
+	if !ok {
+		return
+	}
+	pid, err := uuid.Parse(c.Param("public_id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "validation_error", "message": "invalid public_id"})
+		return
+	}
+	err = h.Integration.CancelConvert(c.Request.Context(), key, pid, c.ClientIP(), c.Request.UserAgent())
+	if err != nil {
+		writeIntegrationError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
 func (h *IntegrationV1Handler) GetHLS(c *gin.Context) {
 	key, ok := middleware.GetAPIKey(c)
 	if !ok {
@@ -276,17 +294,24 @@ func writeIntegrationError(c *gin.Context, err error) {
 		errors.Is(err, service.ErrUploadInvalidChunk),
 		errors.Is(err, service.ErrUploadIncomplete):
 		c.JSON(http.StatusBadRequest, gin.H{"error": "validation_error", "message": err.Error()})
+	case errors.Is(err, service.ErrStorageQuotaExceeded):
+		WriteStorageQuotaExceeded(c)
 	case errors.Is(err, service.ErrUploadRateLimited),
 		errors.Is(err, service.ErrIntegrationQuotaExceeded):
 		c.JSON(http.StatusTooManyRequests, gin.H{"error": "rate_limited", "message": err.Error()})
 	case errors.Is(err, service.ErrVideoInvalidState),
 		errors.Is(err, service.ErrVideoConvertActive),
+		errors.Is(err, service.ErrVideoConvertNotActive),
 		errors.Is(err, service.ErrVideoRetryNotAllowed):
 		c.JSON(http.StatusConflict, gin.H{"error": "conflict", "message": err.Error()})
 	case errors.Is(err, service.ErrSystemBusy):
 		WriteSystemBusy(c)
 	case errors.Is(err, service.ErrConvertQueueFull):
 		WriteQueueFull(c)
+	case errors.Is(err, service.ErrConvertQueuePaused):
+		WriteQueuePaused(c)
+	case errors.Is(err, service.ErrStorageQuotaExceeded):
+		WriteStorageQuotaExceeded(c)
 	default:
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal_error", "message": err.Error()})
 	}

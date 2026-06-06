@@ -15,16 +15,18 @@ const schedulerTickerShutdownTimeout = 30 * time.Second
 
 // Scheduler runs periodic maintenance jobs (storage deletions, upload expiry, trash purge, …).
 type Scheduler struct {
-	Log            *zap.Logger
-	Upload         *service.UploadService
-	StorageCleanup *service.StorageCleanupService
-	DeletionRepo   *repository.StorageDeletionRepository
-	Media          *service.MediaObjectService
-	MediaRepo      *repository.MediaObjectRepository
-	Settings       *service.SettingsService
-	Videos         *repository.VideoRepository
-	Refresh        *repository.RefreshTokenRepository
-	Resources      *resource.Reader
+	Log               *zap.Logger
+	Upload            *service.UploadService
+	StorageCleanup    *service.StorageCleanupService
+	DeletionRepo      *repository.StorageDeletionRepository
+	Media             *service.MediaObjectService
+	MediaRepo         *repository.MediaObjectRepository
+	Settings          *service.SettingsService
+	Videos            *repository.VideoRepository
+	VideoSvc          *service.VideoService
+	Refresh           *repository.RefreshTokenRepository
+	Resources         *resource.Reader
+	ConvertJobTimeout time.Duration
 }
 
 // Run blocks until ctx is cancelled. Jobs run once on start where the API previously did.
@@ -55,6 +57,18 @@ func (s *Scheduler) Run(ctx context.Context) {
 		}
 		n, err := s.StorageCleanup.ProcessPendingDeletions(ctx, s.deletionBatch(ctx))
 		return n, err
+	})
+
+	wg.Add(1)
+	go s.runTicker(&wg, ctx, 5*time.Minute, "stale convert jobs", func(ctx context.Context) (int, error) {
+		if s.VideoSvc == nil {
+			return 0, nil
+		}
+		olderThan := s.ConvertJobTimeout + 5*time.Minute
+		if olderThan <= 0 {
+			olderThan = 2*time.Hour + 5*time.Minute
+		}
+		return s.VideoSvc.FailStaleRunningJobs(ctx, olderThan)
 	})
 
 	wg.Add(1)

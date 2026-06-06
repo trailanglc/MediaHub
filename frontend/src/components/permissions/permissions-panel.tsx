@@ -41,6 +41,7 @@ import { Input } from "@/components/ui/input";
 import { LoadingBlock } from "@/components/ui/loading-block";
 import { PageHeader } from "@/components/ui/page-header";
 import { formatMediaPath } from "@/lib/format-media-path";
+import { permissionLabel } from "@/lib/permissions/permission-labels";
 
 export function PermissionsPanel() {
   const [resourceOverride, setResourceOverride] = useState<string | null>(null);
@@ -97,7 +98,7 @@ export function PermissionsPanel() {
   const handleRevoke = async (id: number, permission: string, email: string) => {
     const ok = await confirm({
       title: "Thu hồi quyền?",
-      description: `Thu hồi quyền "${permission}" của ${email}?`,
+      description: `Thu hồi quyền "${permissionLabel(permission)}" của ${email}?`,
       confirmLabel: "Thu hồi",
       variant: "destructive",
     });
@@ -214,9 +215,7 @@ export function PermissionsPanel() {
                         ({p.resource_type})
                       </span>
                     </DataTableCell>
-                    <DataTableCell>
-                      <code className="text-xs">{p.permission}</code>
-                    </DataTableCell>
+                    <DataTableCell>{permissionLabel(p.permission)}</DataTableCell>
                     <DataTableCell>
                       <Button
                         type="button"

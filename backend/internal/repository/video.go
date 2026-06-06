@@ -422,6 +422,106 @@ type FailedConvertJobRow struct {
 	FinishedAt    *time.Time
 }
 
+type ActiveConvertJobRow struct {
+	JobPublicID   uuid.UUID
+	VideoPublicID uuid.UUID
+	VideoName     string
+	Status        string
+	Attempts      int
+	MaxAttempts   int
+	StartedAt     *time.Time
+}
+
+func (r *VideoRepository) ListActiveConvertJobs(ctx context.Context, limit int) ([]ActiveConvertJobRow, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	if limit > 200 {
+		limit = 200
+	}
+	rows, err := r.pool.Query(ctx, `
+		SELECT j.public_id, m.public_id, m.name, j.status, j.attempts, j.max_attempts, j.started_at
+		FROM convert_jobs j
+		JOIN video_assets v ON v.id = j.video_asset_id
+		JOIN media_objects m ON m.id = v.object_id AND m.deleted_at IS NULL
+		WHERE j.status IN ('pending', 'running')
+		ORDER BY j.started_at DESC NULLS LAST, j.id DESC
+		LIMIT $1
+	`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var list []ActiveConvertJobRow
+	for rows.Next() {
+		var row ActiveConvertJobRow
+		if err := rows.Scan(
+			&row.JobPublicID, &row.VideoPublicID, &row.VideoName,
+			&row.Status, &row.Attempts, &row.MaxAttempts, &row.StartedAt,
+		); err != nil {
+			return nil, err
+		}
+		list = append(list, row)
+	}
+	return list, rows.Err()
+}
+
+type StaleConvertJob struct {
+	JobID         int64
+	JobPublicID   uuid.UUID
+	VideoAssetID  int64
+	VideoPublicID uuid.UUID
+}
+
+func (r *VideoRepository) FailStaleRunningJobs(ctx context.Context, olderThan time.Duration) ([]StaleConvertJob, error) {
+	cutoff := time.Now().Add(-olderThan)
+	rows, err := r.pool.Query(ctx, `
+		SELECT j.id, j.public_id, j.video_asset_id, m.public_id
+		FROM convert_jobs j
+		JOIN video_assets v ON v.id = j.video_asset_id
+		JOIN media_objects m ON m.id = v.object_id
+		WHERE j.status = 'running'
+		  AND j.started_at IS NOT NULL
+		  AND j.started_at < $1
+	`, cutoff)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var stale []StaleConvertJob
+	for rows.Next() {
+		var row StaleConvertJob
+		if err := rows.Scan(&row.JobID, &row.JobPublicID, &row.VideoAssetID, &row.VideoPublicID); err != nil {
+			return nil, err
+		}
+		stale = append(stale, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(stale) == 0 {
+		return nil, nil
+	}
+
+	errMsg := "stale: worker timeout"
+	for _, row := range stale {
+		if _, err := r.pool.Exec(ctx, `
+			UPDATE convert_jobs
+			SET status = 'failed', error = $2, finished_at = now(), updated_at = now()
+			WHERE id = $1 AND status = 'running'
+		`, row.JobID, errMsg); err != nil {
+			return nil, err
+		}
+		if _, err := r.pool.Exec(ctx, `
+			UPDATE video_assets SET hls_status = 'failed', last_error = $2, updated_at = now() WHERE id = $1
+		`, row.VideoAssetID, errMsg); err != nil {
+			return nil, err
+		}
+	}
+	return stale, nil
+}
+
 func (r *VideoRepository) ListRecentFailedJobs(ctx context.Context, limit int) ([]FailedConvertJobRow, error) {
 	if limit <= 0 {
 		limit = 50
@@ -454,6 +554,21 @@ func (r *VideoRepository) ListRecentFailedJobs(ctx context.Context, limit int) (
 		list = append(list, row)
 	}
 	return list, rows.Err()
+}
+
+// DeleteTerminalJobByPublicID removes a finished failed or cancelled convert job record.
+func (r *VideoRepository) DeleteTerminalJobByPublicID(ctx context.Context, publicID uuid.UUID) error {
+	tag, err := r.pool.Exec(ctx, `
+		DELETE FROM convert_jobs
+		WHERE public_id = $1 AND status IN ('failed', 'cancelled')
+	`, publicID)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrConvertJobNotFound
+	}
+	return nil
 }
 
 func (r *VideoRepository) DeleteFinishedJobsOlderThan(ctx context.Context, before time.Time, batchSize int) (int64, error) {

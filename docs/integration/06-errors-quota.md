@@ -17,10 +17,12 @@ Integration API trả JSON lỗi thống nhất:
 | 401 | `unauthorized` | Thiếu/sai API key |
 | 403 | `forbidden` | Scope thiếu, IP không allowlist, ngoài root folder |
 | 404 | `not_found` | Media/session không tồn tại |
-| 409 | `conflict` | Convert đang chạy, retry không được phép |
+| 409 | `conflict` | Convert đang chạy, retry/cancel không được phép |
 | 429 | `rate_limited` | Vượt quota API key |
 | 503 | `system_busy` | Server quá tải (governor) |
 | 503 | `queue_full` | Hàng đợi convert đầy |
+| 503 | `queue_paused` | Queue convert đang tạm dừng |
+| 507 | `storage_quota_exceeded` | Vượt quota storage workspace (Settings) |
 | 500 | `internal_error` | Lỗi server |
 
 ## Quota API key

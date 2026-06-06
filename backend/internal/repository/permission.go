@@ -2,12 +2,16 @@ package repository
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+var ErrPermissionNotFound = errors.New("permission not found")
 
 type Permission struct {
 	ID             int64
@@ -44,6 +48,28 @@ func (r *PermissionRepository) Grant(ctx context.Context, userID, resourceID, gr
 	)
 	if err != nil {
 		return nil, fmt.Errorf("grant permission: %w", err)
+	}
+	return &p, nil
+}
+
+func (r *PermissionRepository) GetByID(ctx context.Context, id int64) (*Permission, error) {
+	var p Permission
+	err := r.pool.QueryRow(ctx, `
+		SELECT p.id, p.user_id, u.public_id, u.email, p.resource_type, p.resource_id,
+		       m.public_id, m.name, p.permission, p.granted_by, p.expires_at, p.revoked_at, p.created_at
+		FROM permissions p
+		JOIN users u ON u.id = p.user_id
+		JOIN media_objects m ON m.id = p.resource_id
+		WHERE p.id = $1 AND p.revoked_at IS NULL
+	`, id).Scan(
+		&p.ID, &p.UserID, &p.UserPublicID, &p.UserEmail, &p.ResourceType, &p.ResourceID,
+		&p.ResourcePublic, &p.ResourceName, &p.Permission, &p.GrantedBy, &p.ExpiresAt, &p.RevokedAt, &p.CreatedAt,
+	)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrPermissionNotFound
+		}
+		return nil, fmt.Errorf("get permission: %w", err)
 	}
 	return &p, nil
 }

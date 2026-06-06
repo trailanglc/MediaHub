@@ -23,8 +23,9 @@ Tune: `REDIS_POOL_SIZE`, `REDIS_MIN_IDLE_CONNS` trong `backend/.env`.
 Owner: **`/members`**, **`/permissions`**.
 
 - Role: `manager`, `viewer` (owner toàn quyền)
-- Quyền resource: `read`, `upload`, `update`, `delete`, `manage`, …
-- Chia sẻ folder con — member chỉ thấy nhánh được cấp
+- Quyền resource: `read`, `upload`, `update`, `delete`, `convert`, `stream`, `download`, `share`, `manage`
+- `manage` — toàn quyền trên resource; `share` — gán/thu hồi quyền con (không gán `manage`/`share` trừ Owner)
+- Chia sẻ folder con — member chỉ thấy nhánh được cấp; File Manager → «Chia sẻ / quyền» khi có `manage` hoặc `share`
 - Folder Root seed: `00000000-0000-4000-8000-000000000001`
 - Member: `GET /api/permissions/mine`, Dashboard riêng
 
@@ -34,5 +35,5 @@ API chính:
 |--------|------|
 | GET/POST | `/api/members` |
 | GET/PATCH/DELETE | `/api/members/{public_id}` |
-| GET/POST | `/api/permissions` |
-| DELETE | `/api/permissions/{id}` |
+| GET/POST | `/api/permissions` | Owner hoặc member có `manage`/`share` trên `resource_id` |
+| DELETE | `/api/permissions/{id}` | Owner hoặc delegate trên resource của grant |

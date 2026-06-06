@@ -8,6 +8,8 @@ X-API-Key: mh_...
 
 Không dùng query `api_key`. Không dùng JWT cookie dashboard cho `/api/v1`.
 
+Xác thực key: server hash `X-API-Key` → tra Redis `cache:apikey:hash:{sha256}`; cache miss thì `SELECT` một bản ghi active theo `key_hash` rồi ghi lại Redis (TTL ~5 phút). Revoke/update key xóa cache ngay.
+
 ## Ví dụ
 
 ```bash

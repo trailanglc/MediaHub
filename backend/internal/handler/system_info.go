@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/anhtuanlc/mediahub/internal/config"
@@ -14,6 +15,7 @@ import (
 // SystemInfoHandler exposes owner-only operational summaries.
 type SystemInfoHandler struct {
 	Health   *HealthHandler
+	Queue    *QueueHandler
 	APIKeys  *repository.APIKeyRepository
 	Settings *service.SettingsService
 	Cfg      *config.Config
@@ -35,11 +37,37 @@ func (h *SystemInfoHandler) Storage(c *gin.Context) {
 	if comp.Error != "" {
 		out["error"] = comp.Error
 	}
+	if comp.Details != nil {
+		if comp.Details["stats_partial"] == "true" {
+			out["stats_partial"] = true
+		}
+	}
 	if h.Cfg != nil {
 		out["driver"] = h.Cfg.Storage.Driver
 		out["bucket"] = h.Cfg.Storage.Bucket
-		if h.Cfg.Storage.QuotaBytes > 0 {
-			out["quota_bytes"] = h.Cfg.Storage.QuotaBytes
+	}
+
+	quotaBytes := int64(0)
+	if h.Settings != nil {
+		if settings, err := h.Settings.Get(ctx); err == nil {
+			quotaBytes = settings.Editable.Storage.QuotaBytes
+		}
+	}
+	if quotaBytes <= 0 && h.Cfg != nil {
+		quotaBytes = h.Cfg.Storage.QuotaBytes
+	}
+	if quotaBytes > 0 {
+		out["quota_bytes"] = quotaBytes
+		if comp.Details != nil {
+			if usedStr := comp.Details["used_bytes"]; usedStr != "" {
+				if used, err := strconv.ParseInt(usedStr, 10, 64); err == nil {
+					remaining := quotaBytes - used
+					if remaining < 0 {
+						remaining = 0
+					}
+					out["quota_remaining_bytes"] = remaining
+				}
+			}
 		}
 	}
 	c.JSON(http.StatusOK, out)
@@ -69,12 +97,12 @@ func (h *SystemInfoHandler) Security(c *gin.Context) {
 	}
 
 	resp := gin.H{
-		"login_max_attempts":       5,
-		"login_lockout_window_sec": int((15 * time.Minute).Seconds()),
-		"redis_fail_closed":        false,
+		"login_max_attempts":        5,
+		"login_lockout_window_sec":  int((15 * time.Minute).Seconds()),
+		"redis_fail_closed":         false,
 		"stream_rate_limit_per_min": 120,
-		"active_api_keys":          activeKeys,
-		"global_stream_domains":    globalDomains,
+		"active_api_keys":           activeKeys,
+		"global_stream_domains":     globalDomains,
 		"password_transport": gin.H{
 			"require_encrypted": false,
 		},
@@ -118,5 +146,3 @@ func (h *HealthHandler) ComponentHealth(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, gin.H{"component": name, "health": comp})
 }
-
-// Ensure storage.StatsDetails is used - already in health.go

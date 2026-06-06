@@ -32,6 +32,8 @@ File: `backend/.env` — copy từ `backend/.env.example`.
 | `STORAGE_ACCESS_KEY` / `STORAGE_SECRET_KEY` | Credential MinIO |
 | `STORAGE_USE_PATH_STYLE` | `true` cho MinIO local |
 
+**Quota workspace** cấu hình qua **Settings → Storage** (`storage.quota_bytes`), không phải biến env. Env `STORAGE_QUOTA_BYTES` (nếu set) chỉ là fallback khi settings = 0.
+
 ## Auth & setup
 
 | Biến | Bắt buộc khi |

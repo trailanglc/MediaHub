@@ -97,6 +97,21 @@ func (r *APIKeyRepository) List(ctx context.Context) ([]APIKey, error) {
 	return list, rows.Err()
 }
 
+func (r *APIKeyRepository) GetActiveByHash(ctx context.Context, keyHash string) (*APIKey, error) {
+	row := r.pool.QueryRow(ctx, `
+		SELECT id, public_id, name, key_hash, scopes, allowed_domains, allowed_ips, root_folder_public_id, status, created_by, last_used_at, created_at
+		FROM api_keys WHERE key_hash = $1 AND status = 'active'
+	`, keyHash)
+	k, err := scanAPIKey(row)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrAPIKeyNotFound
+		}
+		return nil, err
+	}
+	return k, nil
+}
+
 func (r *APIKeyRepository) GetByPublicID(ctx context.Context, publicID uuid.UUID) (*APIKey, error) {
 	row := r.pool.QueryRow(ctx, `
 		SELECT id, public_id, name, key_hash, scopes, allowed_domains, allowed_ips, root_folder_public_id, status, created_by, last_used_at, created_at

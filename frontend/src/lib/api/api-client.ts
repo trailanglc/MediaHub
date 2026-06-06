@@ -106,6 +106,12 @@ export type HealthResponse = {
   num_goroutine: number;
   metrics_cache_ttl_seconds?: number;
   metrics_cached_at?: string;
+  upload_metrics?: {
+    init_total: number;
+    chunk_total: number;
+    complete_total: number;
+    fail_total: number;
+  };
   host?: {
     hostname: string;
     os: string;
@@ -508,6 +514,7 @@ export type ObjectCapabilities = {
   update: boolean;
   delete: boolean;
   manage: boolean;
+  share: boolean;
   download: boolean;
 };
 
@@ -961,6 +968,17 @@ export type QueueStatusResponse = {
   convert_jobs: Record<string, number>;
   video_hls: Record<string, number>;
   queue_depth: number;
+  queue_max_depth?: number;
+  queue_paused?: boolean;
+  running_jobs?: Array<{
+    job_public_id: string;
+    video_public_id: string;
+    video_name: string;
+    status: string;
+    attempts: number;
+    max_attempts: number;
+    started_at?: string;
+  }>;
   failed_jobs?: Array<{
     job_public_id: string;
     video_public_id: string;
@@ -970,6 +988,7 @@ export type QueueStatusResponse = {
     error?: string;
     finished_at?: string;
   }>;
+  storage_deletion_jobs?: Record<string, number>;
   media_objects?: {
     total: number;
     folders: number;
@@ -981,6 +1000,100 @@ export function fetchQueueStatus() {
   return apiFetch<QueueStatusResponse>("/api/system/queue");
 }
 
+export type OverviewJobRow = {
+  job_public_id: string;
+  video_public_id: string;
+  video_name: string;
+  status?: string;
+  attempts: number;
+  max_attempts: number;
+  started_at?: string;
+  error?: string;
+  finished_at?: string;
+};
+
+export type SystemOverviewResponse = {
+  generated_at: string;
+  status: string;
+  partial?: boolean;
+  errors?: Record<string, string>;
+  warnings?: HealthWarning[];
+  resource_limits?: {
+    convert_slots: number;
+    defer_convert: boolean;
+    system_busy: boolean;
+    ffmpeg_threads: number;
+  };
+  host?: {
+    cpu_percent: number;
+    memory: { used_percent: number };
+    disks: Array<{ path: string; used_percent: number }>;
+  };
+  components: Record<string, { status: string; error?: string }>;
+  content?: {
+    media_objects?: { total: number; folders: number; files: number };
+    video_hls?: Record<string, number>;
+    videos_active?: number;
+  };
+  queue?: {
+    depth: number;
+    max_depth?: number;
+    paused: boolean;
+    convert_jobs: Record<string, number>;
+    storage_deletion_jobs?: Record<string, number>;
+    running_jobs?: OverviewJobRow[];
+    failed_jobs?: OverviewJobRow[];
+  };
+  storage?: {
+    status: string;
+    error?: string;
+    stats_partial?: boolean;
+    used_bytes?: string;
+    total_bytes?: string;
+    used_percent?: string;
+    object_count?: string;
+    quota_bytes?: number;
+    quota_remaining_bytes?: number;
+  };
+  stream?: StreamAnalyticsResponse;
+  upload_metrics?: {
+    init_total: number;
+    chunk_total: number;
+    complete_total: number;
+    fail_total: number;
+  };
+};
+
+export const SYSTEM_OVERVIEW_QUERY_KEY = ["system-overview"] as const;
+
+export function fetchSystemOverview() {
+  return apiFetch<SystemOverviewResponse>("/api/system/overview");
+}
+
+export function pauseConvertQueue() {
+  return apiFetch<{ ok: boolean; queue_paused: boolean }>("/api/system/queue/pause", {
+    method: "POST",
+  });
+}
+
+export function resumeConvertQueue() {
+  return apiFetch<{ ok: boolean; queue_paused: boolean }>("/api/system/queue/resume", {
+    method: "POST",
+  });
+}
+
+export function cancelConvertVideo(videoPublicId: string) {
+  return apiFetch<{ ok: boolean }>(`/api/videos/${videoPublicId}/convert/cancel`, {
+    method: "POST",
+  });
+}
+
+export function deleteFailedConvertJob(jobPublicId: string) {
+  return apiFetch<{ ok: boolean }>(`/api/system/convert-jobs/${jobPublicId}`, {
+    method: "DELETE",
+  });
+}
+
 export type SystemStorageResponse = {
   status: string;
   details?: Record<string, string>;
@@ -988,6 +1101,8 @@ export type SystemStorageResponse = {
   driver?: string;
   bucket?: string;
   quota_bytes?: number;
+  quota_remaining_bytes?: number;
+  stats_partial?: boolean;
 };
 
 export function fetchSystemStorage() {
@@ -1010,8 +1125,16 @@ export function fetchSystemSecurity() {
   return apiFetch<SystemSecurityResponse>("/api/system/security");
 }
 
+export type StreamAnalyticsResponse = {
+  date?: string;
+  requests_today?: number;
+  bytes_today?: number;
+  requests_total?: number;
+  bytes_total?: number;
+};
+
 export function fetchStreamAnalytics() {
-  return apiFetch<Record<string, unknown>>("/api/system/stream-analytics");
+  return apiFetch<StreamAnalyticsResponse>("/api/system/stream-analytics");
 }
 
 export function fetchComponentHealth(component: string) {

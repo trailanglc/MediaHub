@@ -182,6 +182,8 @@ func writeUploadError(c *gin.Context, logger *zap.Logger, op string, err error) 
 		c.JSON(http.StatusBadRequest, gin.H{"error": "validation_error", "message": "upload missing one or more chunks"})
 	case errors.Is(err, service.ErrUploadMultipart):
 		c.JSON(http.StatusConflict, gin.H{"error": "conflict", "message": "upload session outdated — hủy và upload lại sau migrate 000007"})
+	case errors.Is(err, service.ErrStorageQuotaExceeded):
+		WriteStorageQuotaExceeded(c)
 	case errors.Is(err, repository.ErrMediaObjectNotFound):
 		c.JSON(http.StatusNotFound, gin.H{"error": "not_found", "message": "parent folder not found"})
 	case errors.Is(err, service.ErrMediaInvalidParent):

@@ -113,6 +113,24 @@ func (h *VideoHandler) RetryConvert(c *gin.Context) {
 	c.JSON(http.StatusAccepted, gin.H{"job": job})
 }
 
+func (h *VideoHandler) CancelConvert(c *gin.Context) {
+	u, ok := middleware.GetAuthUser(c)
+	if !ok {
+		return
+	}
+	pid, err := uuid.Parse(c.Param("public_id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "validation_error", "message": "invalid public_id"})
+		return
+	}
+	err = h.videos.CancelConvert(c.Request.Context(), u.ID, u.Role, c.ClientIP(), c.Request.UserAgent(), pid)
+	if err != nil {
+		writeVideoError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
 func (h *VideoHandler) GetHLS(c *gin.Context) {
 	u, ok := middleware.GetAuthUser(c)
 	if !ok {
@@ -212,12 +230,16 @@ func writeVideoError(c *gin.Context, err error) {
 		c.JSON(http.StatusConflict, gin.H{"error": "conflict", "message": err.Error()})
 	case errors.Is(err, service.ErrVideoConvertActive):
 		c.JSON(http.StatusConflict, gin.H{"error": "conflict", "message": "convert already in progress"})
+	case errors.Is(err, service.ErrVideoConvertNotActive):
+		c.JSON(http.StatusConflict, gin.H{"error": "conflict", "message": "no active convert job"})
 	case errors.Is(err, service.ErrVideoRetryNotAllowed):
 		c.JSON(http.StatusConflict, gin.H{"error": "conflict", "message": err.Error()})
 	case errors.Is(err, service.ErrSystemBusy):
 		WriteSystemBusy(c)
 	case errors.Is(err, service.ErrConvertQueueFull):
 		WriteQueueFull(c)
+	case errors.Is(err, service.ErrConvertQueuePaused):
+		WriteQueuePaused(c)
 	case errors.Is(err, service.ErrVideoInvalidVariants):
 		c.JSON(http.StatusBadRequest, gin.H{"error": "validation_error", "message": err.Error()})
 	case errors.Is(err, service.ErrVideoNotStreamable):

@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
-import { isAuditLogsPath } from "@/lib/navigation/navigation";
+import { isOwnerOnlyPath } from "@/lib/navigation/navigation";
 
 const API_URL =
   process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8080";
@@ -50,8 +50,8 @@ export async function proxy(request: NextRequest) {
     return NextResponse.redirect(login);
   }
 
-  // Audit logs: luôn chặn non-owner (kể cả RSC prefetch).
-  if (isAuditLogsPath(pathname)) {
+  // Owner-only routes: chặn non-owner (kể cả RSC prefetch).
+  if (isOwnerOnlyPath(pathname)) {
     const role = await fetchSessionRole(request);
     if (role !== "owner") {
       return NextResponse.redirect(new URL("/dashboard", request.url));

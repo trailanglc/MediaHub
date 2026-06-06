@@ -8,6 +8,7 @@ import (
 
 	"github.com/anhtuanlc/mediahub/internal/auth"
 	"github.com/anhtuanlc/mediahub/internal/integration"
+	"github.com/anhtuanlc/mediahub/internal/platform/rediscache"
 	"github.com/anhtuanlc/mediahub/internal/repository"
 	"github.com/google/uuid"
 )
@@ -35,10 +36,22 @@ type APIKeyService struct {
 	keys    *repository.APIKeyRepository
 	audit   *repository.AuditRepository
 	objects *repository.MediaObjectRepository
+	cache   *rediscache.APIKeyCache
 }
 
-func NewAPIKeyService(keys *repository.APIKeyRepository, audit *repository.AuditRepository, objects *repository.MediaObjectRepository) *APIKeyService {
-	return &APIKeyService{keys: keys, audit: audit, objects: objects}
+func NewAPIKeyService(
+	keys *repository.APIKeyRepository,
+	audit *repository.AuditRepository,
+	objects *repository.MediaObjectRepository,
+	cache *rediscache.APIKeyCache,
+) *APIKeyService {
+	return &APIKeyService{keys: keys, audit: audit, objects: objects, cache: cache}
+}
+
+func (s *APIKeyService) invalidateKeyCache(ctx context.Context, keyHash string) {
+	if s.cache != nil && s.cache.Store != nil {
+		rediscache.InvalidateAPIKeyHash(ctx, s.cache.Store, keyHash)
+	}
 }
 
 func validateScopes(scopes []string) error {
@@ -145,6 +158,9 @@ func (s *APIKeyService) Create(ctx context.Context, createdBy int64, ip, ua stri
 	}
 	actorID := createdBy
 	_ = s.audit.Log(ctx, &actorID, "api_key.create", "api_key", &k.ID, ip, ua, map[string]string{"public_id": k.PublicID.String()})
+	if s.cache != nil {
+		s.cache.Set(ctx, k)
+	}
 	return &CreateAPIKeyResult{Key: toAPIKeyDTO(k), Secret: plain}, nil
 }
 
@@ -156,6 +172,7 @@ func (s *APIKeyService) Revoke(ctx context.Context, actorID int64, ip, ua string
 	if err := s.keys.Revoke(ctx, publicID); err != nil {
 		return err
 	}
+	s.invalidateKeyCache(ctx, k.KeyHash)
 	aid := actorID
 	_ = s.audit.Log(ctx, &aid, "api_key.revoke", "api_key", &k.ID, ip, ua, nil)
 	return nil
@@ -181,29 +198,37 @@ func (s *APIKeyService) Update(ctx context.Context, actorID int64, ip, ua string
 	if err != nil {
 		return nil, err
 	}
+	s.invalidateKeyCache(ctx, k.KeyHash)
+	if k.Status == "active" && s.cache != nil {
+		s.cache.Set(ctx, k)
+	}
 	aid := actorID
 	_ = s.audit.Log(ctx, &aid, "api_key.update", "api_key", &k.ID, ip, ua, map[string]string{"public_id": k.PublicID.String()})
 	dto := toAPIKeyDTO(k)
 	return &dto, nil
 }
 
-// VerifyAPIKey checks plain key against active keys (linear scan; acceptable for small key counts).
+// VerifyAPIKey resolves an active key by hash (Redis cache → single DB lookup on miss).
 func (s *APIKeyService) VerifyAPIKey(ctx context.Context, plain string) (*repository.APIKey, error) {
 	if plain == "" {
 		return nil, ErrAPIKeyInvalid
 	}
 	hash := auth.HashToken(plain)
-	list, err := s.keys.ListActiveHashes(ctx)
+	var k *repository.APIKey
+	var err error
+	if s.cache != nil && s.cache.Enabled() {
+		k, err = s.cache.GetByHash(ctx, hash)
+	} else {
+		k, err = s.keys.GetActiveByHash(ctx, hash)
+	}
 	if err != nil {
+		if errors.Is(err, repository.ErrAPIKeyNotFound) {
+			return nil, ErrAPIKeyInvalid
+		}
 		return nil, err
 	}
-	for i := range list {
-		if list[i].KeyHash == hash {
-			_ = s.keys.TouchLastUsed(ctx, list[i].ID)
-			return &list[i], nil
-		}
-	}
-	return nil, ErrAPIKeyInvalid
+	_ = s.keys.TouchLastUsed(ctx, k.ID)
+	return k, nil
 }
 
 func (s *APIKeyService) HasScope(k *repository.APIKey, scope string) bool {

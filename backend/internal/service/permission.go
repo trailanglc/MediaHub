@@ -75,6 +75,10 @@ func (s *PermissionService) Grant(ctx context.Context, in GrantPermissionInput, 
 	return p, nil
 }
 
+func (s *PermissionService) GetByID(ctx context.Context, id int64) (*repository.Permission, error) {
+	return s.perms.GetByID(ctx, id)
+}
+
 func (s *PermissionService) Revoke(ctx context.Context, id int64, actorID int64, ip, userAgent string) error {
 	if err := s.perms.Revoke(ctx, id); err != nil {
 		return err

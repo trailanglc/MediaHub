@@ -80,6 +80,9 @@ func NewRouter(deps RouterDeps) *gin.Engine {
 			protected.GET("/auth/me", deps.Auth.Me)
 			protected.POST("/auth/logout", deps.Auth.Logout)
 			protected.GET("/permissions/mine", deps.Perm.ListMine)
+			protected.GET("/permissions", deps.Perm.List)
+			protected.POST("/permissions", deps.Perm.Grant)
+			protected.DELETE("/permissions/:id", deps.Perm.Revoke)
 
 			owner := protected.Group("")
 			owner.Use(middleware.RequireOwner())
@@ -92,10 +95,6 @@ func NewRouter(deps RouterDeps) *gin.Engine {
 				owner.POST("/members/:public_id/restore", deps.Member.Restore)
 				owner.DELETE("/members/:public_id/purge", deps.Member.Purge)
 
-				owner.GET("/permissions", deps.Perm.List)
-				owner.POST("/permissions", deps.Perm.Grant)
-				owner.DELETE("/permissions/:id", deps.Perm.Revoke)
-
 				owner.GET("/settings", deps.Settings.Get)
 				owner.PATCH("/settings", deps.Settings.Update)
 
@@ -104,6 +103,7 @@ func NewRouter(deps RouterDeps) *gin.Engine {
 					system.GET("/health", deps.Health.SystemHealth)
 					system.GET("/health/:component", deps.Health.ComponentHealth)
 					if deps.SystemInfo != nil {
+						system.GET("/overview", deps.SystemInfo.Overview)
 						system.GET("/storage", deps.SystemInfo.Storage)
 						system.GET("/security", deps.SystemInfo.Security)
 					} else {
@@ -112,6 +112,9 @@ func NewRouter(deps RouterDeps) *gin.Engine {
 					}
 					if deps.Queue != nil {
 						system.GET("/queue", deps.Queue.QueueStatus)
+						system.POST("/queue/pause", deps.Queue.PauseQueue)
+						system.POST("/queue/resume", deps.Queue.ResumeQueue)
+						system.DELETE("/convert-jobs/:job_public_id", deps.Queue.DeleteFailedJob)
 						system.GET("/stream-analytics", deps.Queue.StreamAnalytics)
 					} else {
 						system.GET("/queue", NotImplemented)
@@ -162,6 +165,7 @@ func NewRouter(deps RouterDeps) *gin.Engine {
 				protected.GET("/videos/:public_id", deps.Videos.Get)
 				protected.POST("/videos/:public_id/convert", deps.Videos.Convert)
 				protected.POST("/videos/:public_id/convert/retry", deps.Videos.RetryConvert)
+				protected.POST("/videos/:public_id/convert/cancel", deps.Videos.CancelConvert)
 				protected.GET("/videos/:public_id/hls", deps.Videos.GetHLS)
 				protected.DELETE("/videos/:public_id/hls", deps.Videos.DeleteHLS)
 				protected.GET("/videos/:public_id/stream-policy", deps.Videos.GetStreamPolicy)
@@ -218,6 +222,7 @@ func NewRouter(deps RouterDeps) *gin.Engine {
 				{
 					convert.POST("/:public_id/convert", deps.Integration.Convert)
 					convert.POST("/:public_id/convert/retry", deps.Integration.RetryConvert)
+					convert.POST("/:public_id/convert/cancel", deps.Integration.CancelConvert)
 				}
 
 				del := media.Group("")

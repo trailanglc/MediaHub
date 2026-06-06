@@ -206,6 +206,21 @@ func (s *IntegrationService) RetryConvert(ctx context.Context, key *repository.A
 	return s.videos.RetryConvert(ctx, userID, role, ip, ua, publicID, input)
 }
 
+func (s *IntegrationService) CancelConvert(ctx context.Context, key *repository.APIKey, publicID uuid.UUID, ip, ua string) error {
+	m, err := s.objects.GetByPublicID(ctx, publicID)
+	if err != nil {
+		return err
+	}
+	if err := s.objectInNamespace(ctx, key, m.ID); err != nil {
+		return ErrIntegrationAccessDenied
+	}
+	if m.Type != "video" {
+		return fmt.Errorf("%w: not a video", ErrVideoNotFound)
+	}
+	userID, role := s.actor(key)
+	return s.videos.CancelConvert(ctx, userID, role, ip, ua, publicID)
+}
+
 func (s *IntegrationService) GetHLSAccess(ctx context.Context, key *repository.APIKey, publicID uuid.UUID) (*HLSAccessDTO, error) {
 	m, err := s.objects.GetByPublicID(ctx, publicID)
 	if err != nil {

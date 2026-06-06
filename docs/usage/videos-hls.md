@@ -12,6 +12,12 @@ Cần `make worker` (FFmpeg) và Redis. Upload video qua File Manager (type `vid
 
 Retry khi failed: `POST /api/videos/{id}/convert/retry`
 
+Hủy job đang chờ/chạy: `POST /api/videos/{id}/convert/cancel` (worker dừng cooperative tại checkpoint FFmpeg, không kill process ngay).
+
+Owner có thể **pause/resume** queue tại **`/system/queue`** (`POST /api/system/queue/pause|resume`). Khi paused, convert mới trả `503 queue_paused`.
+
+Job `running` quá `CONVERT_JOB_TIMEOUT` được scheduler đánh `failed` (stale recovery).
+
 ## Stream HLS
 
 - **Token phiên**: `GET /api/videos/{id}/hls` → master URL có `?token=&exp=`; API set cookie `mh_stream`

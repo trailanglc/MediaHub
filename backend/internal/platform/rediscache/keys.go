@@ -4,6 +4,7 @@ import "time"
 
 const (
 	PrefixAuthUser    = "cache:auth:user:"
+	PrefixAPIKeyHash  = "cache:apikey:hash:"
 	PrefixStreamVideo = "cache:stream:video:"
 
 	KeySettingsV1        = "cache:settings:v1"
@@ -14,6 +15,7 @@ const (
 	ChannelStreamInvalidate = "cache:stream:invalidate"
 
 	TTLAuthUser    = 60 * time.Second
+	TTLAPIKey      = 5 * time.Minute
 	TTLSettings    = 30 * time.Second
 	TTLStreamVideo = 45 * time.Second
 	// TTLHomepagePublic — 0 = no expiry; invalidated when homepage settings change.
@@ -25,6 +27,10 @@ const (
 
 func KeyAuthUser(publicID string) string {
 	return PrefixAuthUser + publicID
+}
+
+func KeyAPIKeyHash(keyHash string) string {
+	return PrefixAPIKeyHash + keyHash
 }
 
 func KeyStreamVideo(videoPublicID string) string {

@@ -27,6 +27,7 @@ import {
 } from "@/components/ui/data-table";
 import { LoadingBlock } from "@/components/ui/loading-block";
 import { toast } from "@/hooks/use-app-toast";
+import { permissionLabel } from "@/lib/permissions/permission-labels";
 
 export function ShareAccessDialog({
   open,
@@ -95,7 +96,7 @@ export function ShareAccessDialog({
                   perms?.items.map((p) => (
                     <DataTableRow key={p.id}>
                       <DataTableCell>{p.user_email}</DataTableCell>
-                      <DataTableCell>{p.permission}</DataTableCell>
+                      <DataTableCell>{permissionLabel(p.permission)}</DataTableCell>
                       <DataTableCell>
                         <Button
                           type="button"

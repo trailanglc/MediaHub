@@ -1,10 +1,43 @@
 # System & maintenance
 
+## Owner dashboard
+
+**`/dashboard`** (Owner) — tóm tắt vận hành: nội dung, queue, storage, stream, sức khỏe dịch vụ. Một request API:
+
+| API | Mô tả |
+|-----|--------|
+| `GET /api/system/overview` | Gom health, queue (tối đa 5 job running/failed), storage quota, stream analytics |
+
+Chi tiết và thao tác (pause queue, cleanup, …) vẫn ở **`/system/health`**, **`/system/queue`**, **`/system/storage`**.
+
 ## Settings (Owner)
 
 **`/settings`** — workspace, media, streaming, storage, security, maintenance (`system_settings`).
 
 API: `GET/PATCH /api/settings`
+
+## Storage quota (Owner)
+
+**Settings → Storage → Quota storage (GB)** (`storage.quota_bytes`). Khi > 0, upload init/complete bị chặn nếu vượt dung lượng bucket + upload đang pending.
+
+Dashboard: **`/system/storage`** — dung lượng MinIO/S3, quota workspace, dọn temp/orphan (dry-run trước khi xóa).
+
+| API | Mô tả |
+|-----|--------|
+| `GET /api/system/storage` | Stats bucket, `quota_bytes`, `quota_remaining_bytes`, `stats_partial` |
+
+## Queue (Owner)
+
+Dashboard: **`/system/queue`** — độ sâu Asynq, job running/failed, pause/resume, hủy convert, backlog xóa S3.
+
+| API | Mô tả |
+|-----|--------|
+| `GET /api/system/queue` | `queue_depth`, `queue_max_depth`, `queue_paused`, `running_jobs`, `storage_deletion_jobs` |
+| `POST /api/system/queue/pause` | Tạm dừng enqueue convert mới |
+| `POST /api/system/queue/resume` | Tiếp tục queue |
+| `POST /api/videos/{id}/convert/cancel` | Hủy job pending/running (cooperative cancel khi FFmpeg đang chạy) |
+
+Scheduler tự recovery job `running` quá hạn (`CONVERT_JOB_TIMEOUT` + 5 phút) → `failed`.
 
 ## Audit logs (Owner)
 
@@ -24,7 +57,7 @@ App logs (zap) ra stdout — cấu hình `LOG_LEVEL` trong [backend-env](../conf
 | API | Mô tả |
 |-----|--------|
 | `POST /api/system/cleanup/temp` | Dọn file tạm |
-| `POST /api/system/cleanup/orphans` | Quét orphan storage |
+| `POST /api/system/cleanup/orphans` | Quét (`dry_run: true`) hoặc xóa orphan storage |
 
 CLI orphan: `make orphan-cleanup` / `ORPHAN_CLEANUP_CONFIRM=1 make orphan-cleanup-apply`
 

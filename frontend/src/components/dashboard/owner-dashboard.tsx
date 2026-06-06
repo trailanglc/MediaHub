@@ -1,110 +1,99 @@
 "use client";
 
-import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
-import { fetchQueueStatus } from "@/lib/api/api-client";
-import { SystemHealthDashboard } from "@/components/system/system-health-dashboard";
 import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+  fetchSystemOverview,
+  SYSTEM_OVERVIEW_QUERY_KEY,
+} from "@/lib/api/api-client";
+import { DashboardComponentsGrid } from "@/components/dashboard/dashboard-components-grid";
+import { DashboardFailedJobs } from "@/components/dashboard/dashboard-failed-jobs";
+import { DashboardHostMetrics } from "@/components/dashboard/dashboard-host-metrics";
+import { DashboardKpiGrid } from "@/components/dashboard/dashboard-kpi-grid";
+import { DashboardQueueSummary } from "@/components/dashboard/dashboard-queue-summary";
+import { DashboardQuickLinks } from "@/components/dashboard/dashboard-quick-links";
+import { DashboardStatusBanner } from "@/components/dashboard/dashboard-status-banner";
+import { DashboardStorageSummary } from "@/components/dashboard/dashboard-storage-summary";
+import { DashboardStreamSummary } from "@/components/dashboard/dashboard-stream-summary";
+import { StatusBadge } from "@/components/system/status-badge";
+import { PageError } from "@/components/feedback/page-states";
+import { Button } from "@/components/ui/button";
 import { PageHeader } from "@/components/ui/page-header";
 import { Separator } from "@/components/ui/separator";
-import { FileIcon, FilmIcon, RadioIcon } from "lucide-react";
 
-function sumCounts(m?: Record<string, number>): number {
-  if (!m) return 0;
-  return Object.values(m).reduce((a, b) => a + b, 0);
-}
-
-const statCards: {
-  title: string;
-  href: string;
-  linkLabel: string;
-  icon: typeof FileIcon;
-}[] = [
-  {
-    title: "Files",
-    href: "/files",
-    linkLabel: "Mở File Manager",
-    icon: FileIcon,
-  },
-  {
-    title: "Videos",
-    href: "/videos",
-    linkLabel: "Xem danh sách video",
-    icon: FilmIcon,
-  },
-  {
-    title: "HLS ready",
-    href: "/videos",
-    linkLabel: "Xem video HLS sẵn sàng",
-    icon: RadioIcon,
-  },
-];
+const REFRESH_MS = 15_000;
 
 export function OwnerDashboard() {
-  const { data: stats } = useQuery({
-    queryKey: ["dashboard-stats"],
-    queryFn: fetchQueueStatus,
-    staleTime: 30_000,
-  });
+  const { data, isLoading, isError, error, dataUpdatedAt, isFetching, refetch } =
+    useQuery({
+      queryKey: SYSTEM_OVERVIEW_QUERY_KEY,
+      queryFn: fetchSystemOverview,
+      refetchInterval: () =>
+        typeof document !== "undefined" &&
+        document.visibilityState === "visible"
+          ? REFRESH_MS
+          : false,
+      refetchIntervalInBackground: false,
+    });
 
-  const fileCount = stats?.media_objects?.files ?? null;
-  const totalVideos = sumCounts(stats?.video_hls);
-  const hlsReady = stats?.video_hls?.ready ?? 0;
+  const statusMeta = data ? (
+    <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+      {isFetching && <span className="text-primary">Đang làm mới…</span>}
+      <StatusBadge status={data.status} />
+      <span className="tabular-nums">
+        Cập nhật {new Date(dataUpdatedAt).toLocaleTimeString("vi-VN")}
+      </span>
+      <Button
+        size="sm"
+        variant="ghost"
+        className="h-7 px-2"
+        onClick={() => void refetch()}
+      >
+        Làm mới
+      </Button>
+    </div>
+  ) : undefined;
 
   return (
     <div className="space-y-8">
       <PageHeader
         title="Dashboard"
-        description="Tổng quan hệ thống MediaHub"
+        description="Tổng quan vận hành MediaHub"
+        actions={statusMeta}
       />
 
-      <section aria-label="Tóm tắt nhanh">
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {statCards.map(({ title, href, linkLabel, icon: Icon }) => {
-            const count =
-              title === "Files"
-                ? fileCount
-                : title === "Videos"
-                  ? totalVideos
-                  : title === "HLS ready"
-                    ? hlsReady
-                    : null;
-            return (
-              <Card key={title} size="sm">
-                <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                  <CardTitle className="text-sm font-medium">{title}</CardTitle>
-                  <Icon className="size-4 text-muted-foreground" aria-hidden />
-                </CardHeader>
-                <CardContent className="pt-0">
-                  <p className="text-2xl font-bold tabular-nums">
-                    {count !== null ? count : "—"}
-                  </p>
-                  <CardDescription className="mt-1.5">
-                    <Link
-                      href={href}
-                      className="font-medium text-foreground underline-offset-4 hover:underline"
-                    >
-                      {linkLabel}
-                    </Link>
-                  </CardDescription>
-                </CardContent>
-              </Card>
-            );
-          })}
-        </div>
-      </section>
+      {isError && (
+        <PageError
+          message={
+            error instanceof Error
+              ? error.message
+              : "Không tải được dữ liệu dashboard"
+          }
+          onRetry={() => void refetch()}
+        />
+      )}
+
+      {!isError && data && <DashboardStatusBanner data={data} />}
+
+      <DashboardKpiGrid data={data} loading={isLoading} />
 
       <Separator />
 
-      <section aria-label="System health">
-        <SystemHealthDashboard compact embedded />
-      </section>
+      <div className="grid gap-6 lg:grid-cols-2">
+        <DashboardHostMetrics data={data} loading={isLoading} />
+        <DashboardStorageSummary data={data} loading={isLoading} />
+      </div>
+
+      <div className="grid gap-6 lg:grid-cols-2">
+        <DashboardQueueSummary data={data} loading={isLoading} />
+        <DashboardStreamSummary data={data} loading={isLoading} />
+      </div>
+
+      <div className="grid gap-6 lg:grid-cols-2">
+        <DashboardFailedJobs data={data} />
+        <DashboardComponentsGrid data={data} loading={isLoading} />
+      </div>
+
+      <DashboardQuickLinks />
     </div>
   );
 }

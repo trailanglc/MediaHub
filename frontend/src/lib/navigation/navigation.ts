@@ -81,8 +81,24 @@ export function filterNavGroups(showOwnerNav: boolean): NavGroup[] {
   })).filter((group) => group.items.length > 0);
 }
 
+/** Owner-only app routes (UI guarded by OwnerGuard + proxy redirect). */
+export const OWNER_ONLY_PATHS = [
+  "/members",
+  "/permissions",
+  "/api-keys",
+  "/settings",
+  "/system",
+] as const;
+
 /** Audit logs dashboard — Owner only (UI + API). */
 export const AUDIT_LOGS_PATH = "/system/audit-logs";
+
+export function isOwnerOnlyPath(pathname: string): boolean {
+  if (isAuditLogsPath(pathname)) return true;
+  return OWNER_ONLY_PATHS.some(
+    (p) => pathname === p || pathname.startsWith(`${p}/`),
+  );
+}
 
 export function isAuditLogsPath(pathname: string): boolean {
   return pathname === AUDIT_LOGS_PATH || pathname.startsWith(`${AUDIT_LOGS_PATH}/`);

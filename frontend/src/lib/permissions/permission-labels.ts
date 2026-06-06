@@ -1,3 +1,17 @@
+export const PERMISSION_ACTIONS = [
+  "read",
+  "upload",
+  "update",
+  "delete",
+  "convert",
+  "share",
+  "stream",
+  "download",
+  "manage",
+] as const;
+
+export type PermissionAction = (typeof PERMISSION_ACTIONS)[number];
+
 const PERMISSION_LABELS: Record<string, string> = {
   read: "Xem",
   upload: "Tải lên",

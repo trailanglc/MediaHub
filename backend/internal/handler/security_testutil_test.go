@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/anhtuanlc/mediahub/internal/auth"
+	"github.com/anhtuanlc/mediahub/internal/authz"
 	"github.com/anhtuanlc/mediahub/internal/config"
 	"github.com/anhtuanlc/mediahub/internal/handler"
 	"github.com/anhtuanlc/mediahub/internal/middleware"
@@ -91,6 +92,7 @@ func newSecurityEnv(t *testing.T) *securityEnv {
 	authSvc := service.NewAuthService(userRepo, refreshRepo, auditRepo, tokenRevoke, loginLimiter, cfg)
 	memberSvc := service.NewMemberService(userRepo, permRepo, refreshRepo, auditRepo, sessionInvalidate, redisCache)
 	permSvc := service.NewPermissionService(permRepo, userRepo, mediaRepo, auditRepo)
+	authzSvc := authz.NewService(permRepo)
 	settingsSvc := service.NewSettingsService(settingsRepo, auditRepo, cfg, redisCache)
 	setupSvc := service.NewSetupService(userRepo, cfg)
 
@@ -126,7 +128,7 @@ func newSecurityEnv(t *testing.T) *securityEnv {
 		Auth:     handler.NewAuthHandler(authSvc, passwordTransport, logger),
 		Audit:    handler.NewAuditHandler(auditRepo),
 		Member:   handler.NewMemberHandler(memberSvc, passwordTransport),
-		Perm:     handler.NewPermissionHandler(permSvc),
+		Perm:     handler.NewPermissionHandler(permSvc, authzSvc, mediaRepo),
 		Settings: handler.NewSettingsHandler(settingsSvc, nil, logger),
 		Password: passwordTransport,
 		AuthMW:   authMW,

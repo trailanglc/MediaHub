@@ -19,10 +19,12 @@ import (
 )
 
 var (
-	ErrVideoAccessDenied   = errors.New("access denied")
-	ErrVideoNotFound       = errors.New("video not found")
-	ErrVideoInvalidState   = errors.New("invalid hls status for operation")
-	ErrVideoConvertActive  = errors.New("convert already in progress")
+	ErrVideoAccessDenied    = errors.New("access denied")
+	ErrVideoNotFound        = errors.New("video not found")
+	ErrVideoInvalidState    = errors.New("invalid hls status for operation")
+	ErrVideoConvertActive   = errors.New("convert already in progress")
+	ErrVideoConvertNotActive = errors.New("no active convert job")
+	ErrConvertJobNotDismissible = errors.New("convert job cannot be dismissed")
 	ErrVideoNotStreamable   = errors.New("video is not ready for streaming")
 	ErrVideoInvalidVariants = errors.New("invalid convert variants")
 	ErrVideoRetryNotAllowed = errors.New("convert retry not allowed")
@@ -140,6 +142,12 @@ func NewVideoService(
 
 func (s *VideoService) SetWebhooks(d *webhook.Dispatcher) {
 	s.webhooks = d
+}
+
+func (s *VideoService) cleanupHLSPrefix(ctx context.Context, videoPublicID uuid.UUID) {
+	if s3, ok := s.store.(*storage.S3Storage); ok {
+		_ = s3.DeletePrefix(ctx, storage.HLSPrefix(videoPublicID))
+	}
 }
 
 func (s *VideoService) invalidateStreamCache(ctx context.Context, publicID uuid.UUID) {
@@ -408,6 +416,15 @@ func (s *VideoService) StartConvert(ctx context.Context, userID int64, role, ip,
 			return nil, ErrConvertQueueFull
 		}
 	}
+	if s.enqueue != nil {
+		paused, err := s.enqueue.IsQueuePaused(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if paused {
+			return nil, ErrConvertQueuePaused
+		}
+	}
 	src := transcode.SourceProfile{}
 	if row.Asset.Height != nil {
 		src.Height = *row.Asset.Height
@@ -419,6 +436,7 @@ func (s *VideoService) StartConvert(ctx context.Context, userID int64, role, ip,
 		return nil, fmt.Errorf("%w: %s", ErrVideoInvalidVariants, err.Error())
 	}
 	jobPID := uuid.New()
+	prevHLS := row.Asset.HLSStatus
 	tx, err := s.videos.Begin(ctx)
 	if err != nil {
 		return nil, err
@@ -442,8 +460,17 @@ func (s *VideoService) StartConvert(ctx context.Context, userID int64, role, ip,
 	if s.convertProgress != nil {
 		_ = s.convertProgress.Set(ctx, publicID.String(), "queued", 8)
 	}
-	if err := s.enqueue.EnqueueConvert(ctx, jobPID, publicID, row.Media.ID, input.Variants); err != nil {
-		return nil, err
+	maxAttempts := defaultConvertMaxAttempts
+	if err := s.enqueue.EnqueueConvert(ctx, jobPID, publicID, row.Media.ID, input.Variants, maxAttempts); err != nil {
+		msg := err.Error()
+		if j, jerr := s.videos.GetConvertJobByPublicID(ctx, jobPID); jerr == nil {
+			_ = s.videos.UpdateJobStatus(ctx, j.ID, "failed", &msg)
+		}
+		_ = s.videos.UpdateHLSStatus(ctx, row.Asset.ID, prevHLS)
+		if s.convertProgress != nil {
+			_ = s.convertProgress.Clear(ctx, publicID.String())
+		}
+		return nil, fmt.Errorf("enqueue convert: %w", err)
 	}
 	actorID := userID
 	auditMeta := map[string]string{"job_public_id": jobPID.String()}
@@ -487,6 +514,105 @@ func (s *VideoService) RetryConvert(ctx context.Context, userID int64, role, ip,
 		return nil, ErrVideoConvertActive
 	}
 	return s.StartConvert(ctx, userID, role, ip, ua, publicID, input)
+}
+
+// FailStaleRunningJobs marks long-running convert jobs as failed and cleans partial HLS output.
+func (s *VideoService) FailStaleRunningJobs(ctx context.Context, olderThan time.Duration) (int, error) {
+	stale, err := s.videos.FailStaleRunningJobs(ctx, olderThan)
+	if err != nil {
+		return 0, err
+	}
+	for _, row := range stale {
+		s.cleanupHLSPrefix(ctx, row.VideoPublicID)
+		if s.convertProgress != nil {
+			_ = s.convertProgress.Clear(ctx, row.VideoPublicID.String())
+			_ = s.convertProgress.ClearCancel(ctx, row.JobPublicID.String())
+		}
+		s.invalidateStreamCache(ctx, row.VideoPublicID)
+	}
+	return len(stale), nil
+}
+
+// CancelConvert cancels the active convert job for a video.
+func (s *VideoService) CancelConvert(ctx context.Context, userID int64, role, ip, ua string, publicID uuid.UUID) error {
+	row, err := s.videos.GetByObjectPublicID(ctx, publicID)
+	if err != nil {
+		if errors.Is(err, repository.ErrVideoAssetNotFound) {
+			return ErrVideoNotFound
+		}
+		return err
+	}
+	if !s.videoCapabilities(ctx, userID, role, row.Media.ID).Convert {
+		return ErrVideoAccessDenied
+	}
+	active, err := s.videos.GetActiveJobForAsset(ctx, row.Asset.ID)
+	if err != nil {
+		return err
+	}
+	if active == nil {
+		return ErrVideoConvertNotActive
+	}
+
+	cancelMsg := "cancelled by user"
+	if err := s.videos.UpdateJobStatus(ctx, active.ID, "cancelled", &cancelMsg); err != nil {
+		return err
+	}
+
+	switch active.Status {
+	case "pending":
+		if s.enqueue != nil {
+			_ = s.enqueue.DeletePendingTaskByJobID(ctx, active.PublicID)
+		}
+		_ = s.videos.UpdateHLSStatus(ctx, row.Asset.ID, "none")
+	case "running":
+		if s.convertProgress != nil {
+			_ = s.convertProgress.RequestCancel(ctx, active.PublicID.String())
+		}
+		_ = s.videos.UpdateHLSStatus(ctx, row.Asset.ID, "failed")
+		s.cleanupHLSPrefix(ctx, publicID)
+	}
+
+	if s.convertProgress != nil {
+		_ = s.convertProgress.Clear(ctx, publicID.String())
+	}
+	s.invalidateStreamCache(ctx, publicID)
+
+	actorID := userID
+	meta := map[string]string{"job_public_id": active.PublicID.String()}
+	_ = s.audit.Log(ctx, &actorID, "video.convert.cancel", "video", &row.Media.ID, ip, ua, meta)
+	return nil
+}
+
+// DeleteFailedConvertJob removes a failed or cancelled job record from history (Owner/system).
+func (s *VideoService) DeleteFailedConvertJob(ctx context.Context, userID int64, role, ip, ua string, jobPublicID uuid.UUID) error {
+	if role != "owner" {
+		return ErrVideoAccessDenied
+	}
+	job, err := s.videos.GetConvertJobByPublicID(ctx, jobPublicID)
+	if err != nil {
+		if errors.Is(err, repository.ErrConvertJobNotFound) {
+			return ErrConvertJobNotDismissible
+		}
+		return err
+	}
+	if job.Status != "failed" && job.Status != "cancelled" {
+		return ErrConvertJobNotDismissible
+	}
+	row, err := s.videos.GetVideoRowByAssetID(ctx, job.VideoAssetID)
+	if err != nil {
+		return err
+	}
+	if err := s.videos.DeleteTerminalJobByPublicID(ctx, jobPublicID); err != nil {
+		return err
+	}
+	actorID := userID
+	meta := map[string]string{
+		"job_public_id":   jobPublicID.String(),
+		"video_public_id": row.Media.PublicID.String(),
+		"status":          job.Status,
+	}
+	_ = s.audit.Log(ctx, &actorID, "system.convert_job.delete", "convert_job", &row.Media.ID, ip, ua, meta)
+	return nil
 }
 
 func (s *VideoService) GetHLSAccess(ctx context.Context, userID int64, role string, publicID uuid.UUID) (*HLSAccessDTO, error) {

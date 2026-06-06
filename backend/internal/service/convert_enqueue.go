@@ -13,8 +13,13 @@ import (
 
 const asynqDefaultQueue = "default"
 
+const defaultConvertMaxAttempts = 3
+
 // ErrConvertQueueFull is returned when the Asynq convert queue exceeds its configured cap.
 var ErrConvertQueueFull = fmt.Errorf("convert queue full")
+
+// ErrConvertQueuePaused is returned when the convert queue is paused.
+var ErrConvertQueuePaused = fmt.Errorf("convert queue paused")
 
 type ConvertEnqueue struct {
 	client    *asynq.Client
@@ -54,13 +59,17 @@ func (e *ConvertEnqueue) MaxDepth() int {
 	return e.maxDepth
 }
 
+func (e *ConvertEnqueue) queueInfo() (*asynq.QueueInfo, error) {
+	if e == nil || e.inspector == nil {
+		return nil, nil
+	}
+	return e.inspector.GetQueueInfo(asynqDefaultQueue)
+}
+
 // PendingDepth counts tasks waiting or running in the default Asynq queue.
 func (e *ConvertEnqueue) PendingDepth(ctx context.Context) (int, error) {
-	if e == nil || e.inspector == nil {
-		return 0, nil
-	}
 	_ = ctx
-	info, err := e.inspector.GetQueueInfo(asynqDefaultQueue)
+	info, err := e.queueInfo()
 	if err != nil {
 		return 0, err
 	}
@@ -70,7 +79,44 @@ func (e *ConvertEnqueue) PendingDepth(ctx context.Context) (int, error) {
 	return info.Pending + info.Active + info.Scheduled + info.Retry, nil
 }
 
-func (e *ConvertEnqueue) EnqueueConvert(ctx context.Context, jobPublicID, videoPublicID uuid.UUID, objectID int64, variants []string) error {
+// IsQueuePaused reports whether the default convert queue is paused in Asynq.
+func (e *ConvertEnqueue) IsQueuePaused(ctx context.Context) (bool, error) {
+	_ = ctx
+	info, err := e.queueInfo()
+	if err != nil {
+		return false, err
+	}
+	if info == nil {
+		return false, nil
+	}
+	return info.Paused, nil
+}
+
+func (e *ConvertEnqueue) PauseQueue(ctx context.Context) error {
+	if e == nil || e.inspector == nil {
+		return fmt.Errorf("convert enqueue not configured")
+	}
+	_ = ctx
+	return e.inspector.PauseQueue(asynqDefaultQueue)
+}
+
+func (e *ConvertEnqueue) ResumeQueue(ctx context.Context) error {
+	if e == nil || e.inspector == nil {
+		return fmt.Errorf("convert enqueue not configured")
+	}
+	_ = ctx
+	return e.inspector.UnpauseQueue(asynqDefaultQueue)
+}
+
+func (e *ConvertEnqueue) EnqueueConvert(ctx context.Context, jobPublicID, videoPublicID uuid.UUID, objectID int64, variants []string, maxAttempts int) error {
+	if maxAttempts <= 0 {
+		maxAttempts = defaultConvertMaxAttempts
+	}
+	if paused, err := e.IsQueuePaused(ctx); err != nil {
+		return err
+	} else if paused {
+		return ErrConvertQueuePaused
+	}
 	if e.maxDepth > 0 {
 		depth, err := e.PendingDepth(ctx)
 		if err != nil {
@@ -92,6 +138,45 @@ func (e *ConvertEnqueue) EnqueueConvert(ctx context.Context, jobPublicID, videoP
 		return err
 	}
 	task := asynq.NewTask(internalworker.TypeVideoConvert, payload)
-	_, err = e.client.EnqueueContext(ctx, task)
+	maxRetry := maxAttempts - 1
+	if maxRetry < 0 {
+		maxRetry = 0
+	}
+	_, err = e.client.EnqueueContext(ctx, task,
+		asynq.Queue(asynqDefaultQueue),
+		asynq.TaskID(jobPublicID.String()),
+		asynq.MaxRetry(maxRetry),
+	)
 	return err
+}
+
+// DeletePendingTaskByJobID removes a queued convert task matching job_public_id.
+func (e *ConvertEnqueue) DeletePendingTaskByJobID(ctx context.Context, jobPublicID uuid.UUID) error {
+	if e == nil || e.inspector == nil {
+		return nil
+	}
+	_ = ctx
+	target := jobPublicID.String()
+	listFns := []func(string, ...asynq.ListOption) ([]*asynq.TaskInfo, error){
+		e.inspector.ListPendingTasks,
+		e.inspector.ListScheduledTasks,
+		e.inspector.ListRetryTasks,
+	}
+	for _, listFn := range listFns {
+		tasks, err := listFn(asynqDefaultQueue)
+		if err != nil {
+			return err
+		}
+		for _, t := range tasks {
+			var p internalworker.ConvertPayload
+			if json.Unmarshal(t.Payload, &p) != nil || p.JobPublicID != target {
+				continue
+			}
+			if err := e.inspector.DeleteTask(asynqDefaultQueue, t.ID); err != nil {
+				return err
+			}
+			return nil
+		}
+	}
+	return nil
 }

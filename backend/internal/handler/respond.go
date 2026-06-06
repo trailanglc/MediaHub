@@ -30,6 +30,24 @@ func WriteQueueFull(c *gin.Context) {
 	})
 }
 
+// WriteQueuePaused responds with HTTP 503 when the convert queue is paused.
+func WriteQueuePaused(c *gin.Context) {
+	c.Header("Retry-After", "120")
+	c.JSON(http.StatusServiceUnavailable, gin.H{
+		"error":               "queue_paused",
+		"message":             "Hàng đợi chuyển mã đang tạm dừng.",
+		"retry_after_seconds": 120,
+	})
+}
+
+// WriteStorageQuotaExceeded responds with HTTP 507 when workspace storage quota is exceeded.
+func WriteStorageQuotaExceeded(c *gin.Context) {
+	c.JSON(http.StatusInsufficientStorage, gin.H{
+		"error":   "storage_quota_exceeded",
+		"message": "Đã vượt quota dung lượng storage workspace.",
+	})
+}
+
 // WriteServicePressure maps resource-related service errors to stable HTTP responses.
 func WriteServicePressure(c *gin.Context, err error) bool {
 	switch {
@@ -38,6 +56,9 @@ func WriteServicePressure(c *gin.Context, err error) bool {
 		return true
 	case errors.Is(err, service.ErrConvertQueueFull):
 		WriteQueueFull(c)
+		return true
+	case errors.Is(err, service.ErrConvertQueuePaused):
+		WriteQueuePaused(c)
 		return true
 	default:
 		return false

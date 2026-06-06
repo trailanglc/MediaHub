@@ -94,12 +94,6 @@ func RunAPI(ctx context.Context, s *Shared) error {
 
 	videoRepo := repository.NewVideoRepository(pool)
 	apiKeyRepo := repository.NewAPIKeyRepository(pool)
-	systemInfo := &handler.SystemInfoHandler{
-		Health:   health,
-		APIKeys:  apiKeyRepo,
-		Settings: settingsSvc,
-		Cfg:      cfg,
-	}
 	convertEnqueue := service.NewConvertEnqueue(cfg.RedisAddr, cfg.ConvertQueueMaxDepth)
 	defer convertEnqueue.Close() //nolint:errcheck
 	health.ConvertQueue = convertEnqueue
@@ -112,7 +106,8 @@ func RunAPI(ctx context.Context, s *Shared) error {
 		Videos:        videoRepo,
 		GlobalDomains: settingsSvc.GlobalAllowedDomains,
 	}
-	apiKeySvc := service.NewAPIKeyService(apiKeyRepo, auditRepo, mediaRepo)
+	apiKeyCache := &rediscache.APIKeyCache{Store: redisCache, Keys: apiKeyRepo}
+	apiKeySvc := service.NewAPIKeyService(apiKeyRepo, auditRepo, mediaRepo, apiKeyCache)
 	deliveryBase := cfg.DeliveryBaseURL()
 	deliverySvc := service.NewDeliveryService(streamTok, deliveryBase, cfg.AssetDeliveryURLTTL)
 	imageTransform := service.NewImageTransformService(store, redisCache, cfg.ImageTransformCacheTTL)
@@ -122,8 +117,16 @@ func RunAPI(ctx context.Context, s *Shared) error {
 	streamLimiter := streamplat.NewRateLimiter(redisClient, cfg.StreamRateLimitPerMin, cfg.RedisFailClosed).
 		WithSegmentLimit(cfg.StreamSegmentRateLimitPerMin)
 
-	queueHandler := handler.NewQueueHandler(videoRepo, mediaRepo, cfg.RedisAddr, streamMetrics)
+	queueHandler := handler.NewQueueHandler(videoRepo, videoSvc, mediaRepo, deletionRepo, convertEnqueue, auditRepo, cfg.RedisAddr, streamMetrics)
 	defer queueHandler.Close() //nolint:errcheck
+
+	systemInfo := &handler.SystemInfoHandler{
+		Health:   health,
+		Queue:    queueHandler,
+		APIKeys:  apiKeyRepo,
+		Settings: settingsSvc,
+		Cfg:      cfg,
+	}
 
 	if cfg.AppEnv == "development" {
 		if cfg.JWTSecret == "" {
@@ -146,7 +149,7 @@ func RunAPI(ctx context.Context, s *Shared) error {
 		Setup:      setupHandler,
 		Auth:       handler.NewAuthHandler(authSvc, passwordTransport, logger),
 		Member:     handler.NewMemberHandler(memberSvc, passwordTransport),
-		Perm:       handler.NewPermissionHandler(permSvc),
+		Perm:       handler.NewPermissionHandler(permSvc, authzSvc, mediaRepo),
 		Settings:   handler.NewSettingsHandler(settingsSvc, homepageAssets, logger),
 		Objects:    handler.NewObjectHandler(mediaSvc),
 		Upload:     handler.NewUploadHandler(uploadSvc, logger),

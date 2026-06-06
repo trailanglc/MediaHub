@@ -47,7 +47,7 @@ export function ObjectActionsMenu({
     : (onPreview && object.type !== "folder") ||
       (onRename && caps.update) ||
       (onMove && caps.update) ||
-      (onShare && caps.manage) ||
+      (onShare && (caps.manage || caps.share)) ||
       (onDelete && caps.delete);
 
   if (!hasAny) return null;
@@ -95,7 +95,7 @@ export function ObjectActionsMenu({
             Di chuyển
           </DropdownMenuItem>
         )}
-        {!trashMode && onShare && caps.manage && (
+        {!trashMode && onShare && (caps.manage || caps.share) && (
           <DropdownMenuItem onClick={onShare}>
             <Share2Icon className="size-4" />
             Chia sẻ / quyền

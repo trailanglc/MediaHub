@@ -270,3 +270,13 @@ func (r *UploadSessionRepository) ListPendingStorageGuards(ctx context.Context) 
 	}
 	return prefixes, keys, rows.Err()
 }
+
+func (r *UploadSessionRepository) SumPendingUploadBytes(ctx context.Context) (int64, error) {
+	var total int64
+	err := r.pool.QueryRow(ctx, `
+		SELECT COALESCE(SUM(total_size), 0)
+		FROM upload_sessions
+		WHERE status = 'pending'
+	`).Scan(&total)
+	return total, err
+}

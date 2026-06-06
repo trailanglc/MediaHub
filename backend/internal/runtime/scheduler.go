@@ -5,6 +5,7 @@ import (
 
 	"github.com/anhtuanlc/mediahub/internal/authz"
 	"github.com/anhtuanlc/mediahub/internal/background"
+	convertprogress "github.com/anhtuanlc/mediahub/internal/platform/convert"
 	"github.com/anhtuanlc/mediahub/internal/platform/rediscache"
 	"github.com/anhtuanlc/mediahub/internal/platform/resource"
 	"github.com/anhtuanlc/mediahub/internal/platform/upload"
@@ -38,17 +39,28 @@ func RunScheduler(ctx context.Context, s *Shared) error {
 	uploadLimiter := upload.NewRateLimiter(redisClient, cfg.UploadInitPerMinute)
 	uploadSvc := service.NewUploadService(uploadRepo, mediaSvc, pool, store, thumbnailSvc, uploadLimiter, cfg.MaxPendingUploadsPerUser, cfg.PresignedPutURLTTL)
 
+	convertEnqueue := service.NewConvertEnqueue(cfg.RedisAddr, cfg.ConvertQueueMaxDepth)
+	defer convertEnqueue.Close() //nolint:errcheck
+	streamTok := service.NewStreamTokenService(cfg.StreamSigningSecret)
+	convertProg := convertprogress.NewProgressStore(redisClient)
+	videoSvc := service.NewVideoService(
+		videoRepo, mediaRepo, authzSvc, auditRepo, settingsSvc, store,
+		convertEnqueue, streamTok, cfg.APIPublicURL, convertProg, rediscache.NewStore(redisClient), resReader,
+	)
+
 	sched := &background.Scheduler{
-		Log:            logger,
-		Upload:         uploadSvc,
-		StorageCleanup: storageCleanup,
-		DeletionRepo:   deletionRepo,
-		Media:          mediaSvc,
-		MediaRepo:      mediaRepo,
-		Settings:       settingsSvc,
-		Videos:         videoRepo,
-		Refresh:        refreshRepo,
-		Resources:      resReader,
+		Log:               logger,
+		Upload:            uploadSvc,
+		StorageCleanup:    storageCleanup,
+		DeletionRepo:      deletionRepo,
+		Media:             mediaSvc,
+		MediaRepo:         mediaRepo,
+		Settings:          settingsSvc,
+		Videos:            videoRepo,
+		VideoSvc:          videoSvc,
+		Refresh:           refreshRepo,
+		Resources:         resReader,
+		ConvertJobTimeout: cfg.ConvertJobTimeout,
 	}
 
 	logger.Info("scheduler starting")

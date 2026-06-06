@@ -59,7 +59,20 @@ func RunWorker(ctx context.Context, s *Shared) error {
 
 	srv := asynq.NewServer(
 		asynq.RedisClientOpt{Addr: cfg.RedisAddr},
-		asynq.Config{Concurrency: cfg.ConvertMaxConcurrent},
+		asynq.Config{
+			Concurrency: cfg.ConvertMaxConcurrent,
+			RetryDelayFunc: func(n int, err error, task *asynq.Task) time.Duration {
+				delays := []time.Duration{
+					30 * time.Second,
+					2 * time.Minute,
+					10 * time.Minute,
+				}
+				if n >= len(delays) {
+					return delays[len(delays)-1]
+				}
+				return delays[n]
+			},
+		},
 	)
 
 	mux := asynq.NewServeMux()

@@ -276,3 +276,21 @@ func (r *StorageDeletionRepository) DeleteTerminalOlderThan(ctx context.Context,
 	}
 	return total, nil
 }
+
+func (r *StorageDeletionRepository) CountByStatus(ctx context.Context) (map[string]int64, error) {
+	rows, err := r.pool.Query(ctx, `SELECT status, COUNT(*) FROM storage_deletion_jobs GROUP BY status`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make(map[string]int64)
+	for rows.Next() {
+		var s string
+		var n int64
+		if err := rows.Scan(&s, &n); err != nil {
+			return nil, err
+		}
+		out[s] = n
+	}
+	return out, rows.Err()
+}

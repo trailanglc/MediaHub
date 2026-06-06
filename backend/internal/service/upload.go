@@ -31,6 +31,7 @@ var (
 	ErrUploadRateLimited     = errors.New("upload init rate limit exceeded")
 	ErrUploadTooManyPending  = errors.New("too many pending uploads")
 	ErrUploadDirectRequired  = errors.New("direct upload requires PUT to storage before complete")
+	ErrStorageQuotaExceeded  = errors.New("storage quota exceeded")
 )
 
 const (
@@ -135,6 +136,9 @@ func (s *UploadService) Init(ctx context.Context, userID int64, role string, in 
 	}
 	if in.Size > settings.Editable.Media.MaxUploadBytes {
 		return nil, ErrUploadTooLarge
+	}
+	if err := s.checkStorageQuota(ctx, in.Size); err != nil {
+		return nil, err
 	}
 
 	parent, err := s.media.Objects().GetByPublicID(ctx, in.ParentPublicID)
@@ -311,6 +315,9 @@ func (s *UploadService) Complete(ctx context.Context, userID int64, role string,
 		return nil, err
 	}
 	if err := s.validateSessionActive(sess, userID); err != nil {
+		return nil, err
+	}
+	if err := s.checkStorageQuotaAfterUpload(ctx); err != nil {
 		return nil, err
 	}
 	if sess.FinalStorageKey == nil || *sess.FinalStorageKey == "" {
@@ -531,4 +538,60 @@ func (s *UploadService) abortMultipart(ctx context.Context, sess *repository.Upl
 			_ = deleter.DeletePrefix(ctx, sess.StoragePrefix)
 		}
 	}
+}
+
+func (s *UploadService) storageQuotaBytes(ctx context.Context) (int64, error) {
+	settings, err := s.media.Settings().Get(ctx)
+	if err != nil {
+		return 0, err
+	}
+	return settings.Editable.Storage.QuotaBytes, nil
+}
+
+func (s *UploadService) usedStorageBytes(ctx context.Context) (int64, error) {
+	stats, err := s.store.Stats(ctx)
+	if err != nil {
+		return 0, err
+	}
+	return stats.UsedBytes, nil
+}
+
+func (s *UploadService) checkStorageQuota(ctx context.Context, additionalBytes int64) error {
+	quota, err := s.storageQuotaBytes(ctx)
+	if err != nil {
+		return err
+	}
+	if quota <= 0 {
+		return nil
+	}
+	used, err := s.usedStorageBytes(ctx)
+	if err != nil {
+		return err
+	}
+	pending, err := s.sessions.SumPendingUploadBytes(ctx)
+	if err != nil {
+		return err
+	}
+	if used+pending+additionalBytes > quota {
+		return ErrStorageQuotaExceeded
+	}
+	return nil
+}
+
+func (s *UploadService) checkStorageQuotaAfterUpload(ctx context.Context) error {
+	quota, err := s.storageQuotaBytes(ctx)
+	if err != nil {
+		return err
+	}
+	if quota <= 0 {
+		return nil
+	}
+	used, err := s.usedStorageBytes(ctx)
+	if err != nil {
+		return err
+	}
+	if used > quota {
+		return ErrStorageQuotaExceeded
+	}
+	return nil
 }

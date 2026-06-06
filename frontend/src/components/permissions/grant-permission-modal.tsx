@@ -6,7 +6,12 @@ import { z } from "zod";
 import { useState } from "react";
 import { grantPermission } from "@/lib/api-client";
 import type { Member } from "@/lib/api-client";
-import { authErrorMessage } from "@/hooks/use-auth";
+import { authErrorMessage, isOwner, useMe } from "@/hooks/use-auth";
+import {
+  PERMISSION_ACTIONS,
+  permissionLabel,
+  type PermissionAction,
+} from "@/lib/permissions/permission-labels";
 import { toast } from "@/hooks/use-app-toast";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -22,18 +27,6 @@ import { FormField, FormStack } from "@/components/ui/form-field";
 import { NativeSelect } from "@/components/ui/native-select";
 import { Spinner } from "@/components/ui/spinner";
 import { UI_COPY } from "@/lib/ui-copy";
-
-const PERMISSION_ACTIONS = [
-  "read",
-  "upload",
-  "update",
-  "delete",
-  "convert",
-  "share",
-  "stream",
-  "download",
-  "manage",
-] as const;
 
 const schema = z.object({
   user_public_id: z.string().min(1, "Chọn member"),
@@ -56,6 +49,10 @@ export function GrantPermissionModal({
   onSuccess: () => void;
 }) {
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const { data: user } = useMe();
+  const grantablePermissions: PermissionAction[] = isOwner(user)
+    ? [...PERMISSION_ACTIONS]
+    : PERMISSION_ACTIONS.filter((p) => p !== "manage" && p !== "share");
 
   const {
     register,
@@ -112,9 +109,9 @@ export function GrantPermissionModal({
           </FormField>
           <FormField label="Quyền" error={errors.permission?.message} required>
             <NativeSelect {...register("permission")}>
-              {PERMISSION_ACTIONS.map((a) => (
+              {grantablePermissions.map((a) => (
                 <option key={a} value={a}>
-                  {a}
+                  {permissionLabel(a)}
                 </option>
               ))}
             </NativeSelect>

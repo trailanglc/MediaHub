@@ -37,6 +37,7 @@ type ObjectCapabilities struct {
 	Update   bool `json:"update"`
 	Delete   bool `json:"delete"`
 	Manage   bool `json:"manage"`
+	Share    bool `json:"share"`
 	Download bool `json:"download"`
 }
 
@@ -171,7 +172,9 @@ func (s *MediaObjectService) checkFolderGetAccess(
 
 func (s *MediaObjectService) capabilities(ctx context.Context, userID int64, role string, resourceID int64) ObjectCapabilities {
 	if authz.IsOwnerRole(role) {
-		return ObjectCapabilities{Read: true, Upload: true, Update: true, Delete: true, Manage: true, Download: true}
+		return ObjectCapabilities{
+			Read: true, Upload: true, Update: true, Delete: true, Manage: true, Share: true, Download: true,
+		}
 	}
 	cap := ObjectCapabilities{}
 	checks := []struct {
@@ -183,11 +186,15 @@ func (s *MediaObjectService) capabilities(ctx context.Context, userID int64, rol
 		{authz.ActionUpdate, &cap.Update},
 		{authz.ActionDelete, &cap.Delete},
 		{authz.ActionManage, &cap.Manage},
+		{authz.ActionShare, &cap.Share},
 		{authz.ActionDownload, &cap.Download},
 	}
 	for _, c := range checks {
 		ok, _ := s.authz.HasPermission(ctx, userID, role, resourceID, c.action)
 		*c.dest = ok
+	}
+	if cap.Manage {
+		cap.Share = true
 	}
 	return cap
 }
@@ -282,6 +289,7 @@ func objectCapabilitiesFromAuthz(c authz.Capabilities) ObjectCapabilities {
 		Update:   c.Update,
 		Delete:   c.Delete,
 		Manage:   c.Manage,
+		Share:    c.Share,
 		Download: c.Download,
 	}
 }

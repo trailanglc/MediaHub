@@ -18,6 +18,7 @@ tags:
   - name: Media
   - name: Convert
   - name: Delivery
+  - name: System
 components:
   securitySchemes:
     ApiKeyAuth:
@@ -810,3 +811,128 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "403":
           $ref: "#/components/responses/Forbidden"
+  /api/system/overview:
+    get:
+      tags: [System]
+      summary: Owner dashboard overview (aggregated metrics)
+      description: |
+        Single response for the Owner dashboard: host resources, component health,
+        content counts, queue snapshot (max 5 running/failed jobs), storage quota,
+        stream analytics, and upload counters. May include `partial: true` with
+        per-section `errors` when a non-critical subsection fails.
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: Aggregated dashboard metrics
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "503":
+          description: Health subsystem unavailable
+  /api/system/storage:
+    get:
+      tags: [System]
+      summary: Object storage usage (Owner)
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: Storage stats and workspace quota
+  /api/system/queue:
+    get:
+      tags: [System]
+      summary: Convert queue status (Owner)
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: Queue depth, jobs, paused flag
+  /api/system/queue/pause:
+    post:
+      tags: [System]
+      summary: Pause convert queue (Owner)
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: Queue paused
+  /api/system/queue/resume:
+    post:
+      tags: [System]
+      summary: Resume convert queue (Owner)
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: Queue resumed
+  /api/system/cleanup/temp:
+    post:
+      tags: [System]
+      summary: Cleanup temp upload objects (Owner)
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: Cleanup result
+  /api/system/cleanup/orphans:
+    post:
+      tags: [System]
+      summary: Scan or delete orphan storage keys (Owner)
+      security:
+        - BearerAuth: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                dry_run:
+                  type: boolean
+                max_delete:
+                  type: integer
+      responses:
+        "200":
+          description: Orphan scan/delete result
+  /api/system/stream-analytics:
+    get:
+      tags: [System]
+      summary: Stream analytics counters (Owner)
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: Redis stream metrics
+  /api/videos/{public_id}/convert/cancel:
+    post:
+      tags: [Convert]
+      summary: Cancel active convert job
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: public_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Job cancelled
+  /api/v1/media/{public_id}/convert/cancel:
+    post:
+      tags: [Convert]
+      summary: Cancel active convert job (Integration API)
+      security:
+        - ApiKeyAuth: []
+      parameters:
+        - name: public_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Job cancelled

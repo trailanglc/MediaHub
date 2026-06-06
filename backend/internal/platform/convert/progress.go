@@ -67,3 +67,35 @@ func (s *ProgressStore) Clear(ctx context.Context, videoPublicID string) error {
 	}
 	return s.redis.Del(ctx, s.key(videoPublicID)).Err()
 }
+
+const cancelKeyPrefix = "convert:cancel:"
+
+func (s *ProgressStore) cancelKey(jobPublicID string) string {
+	return cancelKeyPrefix + jobPublicID
+}
+
+// RequestCancel signals a running convert worker to stop cooperatively.
+func (s *ProgressStore) RequestCancel(ctx context.Context, jobPublicID string) error {
+	if s.redis == nil {
+		return nil
+	}
+	return s.redis.Set(ctx, s.cancelKey(jobPublicID), "1", 24*time.Hour).Err()
+}
+
+func (s *ProgressStore) IsCancelRequested(ctx context.Context, jobPublicID string) (bool, error) {
+	if s.redis == nil {
+		return false, nil
+	}
+	n, err := s.redis.Exists(ctx, s.cancelKey(jobPublicID)).Result()
+	if err != nil {
+		return false, err
+	}
+	return n > 0, nil
+}
+
+func (s *ProgressStore) ClearCancel(ctx context.Context, jobPublicID string) error {
+	if s.redis == nil {
+		return nil
+	}
+	return s.redis.Del(ctx, s.cancelKey(jobPublicID)).Err()
+}

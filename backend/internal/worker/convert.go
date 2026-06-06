@@ -92,9 +92,17 @@ func (p *ConvertProcessor) ProcessTask(ctx context.Context, t *asynq.Task) error
 	if err != nil {
 		return err
 	}
+	if job.Status == "cancelled" {
+		return nil
+	}
 	row, err := videos.GetVideoRowByAssetID(ctx, job.VideoAssetID)
 	if err != nil {
 		return err
+	}
+	if aborted, err := p.abortIfCancelled(ctx, payload, videos, job, row.Asset.ID, videoPID, videoID); err != nil {
+		return err
+	} else if aborted {
+		return nil
 	}
 	if row.Media.StorageKey == nil || *row.Media.StorageKey == "" {
 		return p.fail(ctx, payload, videos, job, row.Asset.ID, videoPID, videoID, "missing storage key")
@@ -121,6 +129,11 @@ func (p *ConvertProcessor) ProcessTask(ctx context.Context, t *asynq.Task) error
 	if err := p.downloadSource(ctx, *row.Media.StorageKey, sourcePath); err != nil {
 		return p.fail(ctx, payload, videos, job, row.Asset.ID, videoPID, videoID, err.Error())
 	}
+	if aborted, err := p.abortIfCancelled(ctx, payload, videos, job, row.Asset.ID, videoPID, videoID); err != nil {
+		return err
+	} else if aborted {
+		return nil
+	}
 
 	cfg := transcode.Config{
 		FFmpegPath:  p.deps.FFmpegPath,
@@ -142,6 +155,11 @@ func (p *ConvertProcessor) ProcessTask(ctx context.Context, t *asynq.Task) error
 	}); err != nil {
 		p.cleanupHLSPrefix(ctx, videoPID)
 		return p.fail(ctx, payload, videos, job, row.Asset.ID, videoPID, videoID, err.Error())
+	}
+	if aborted, err := p.abortIfCancelled(ctx, payload, videos, job, row.Asset.ID, videoPID, videoID); err != nil {
+		return err
+	} else if aborted {
+		return nil
 	}
 	if err := transcode.ValidateHLSOutput(outDir); err != nil {
 		p.cleanupHLSPrefix(ctx, videoPID)
@@ -240,6 +258,35 @@ func (p *ConvertProcessor) cleanupHLSPrefix(ctx context.Context, videoPID uuid.U
 	if p.deps.DeletePrefix != nil {
 		_ = p.deps.DeletePrefix(ctx, storage.HLSPrefix(videoPID))
 	}
+}
+
+func (p *ConvertProcessor) abortIfCancelled(
+	ctx context.Context,
+	payload ConvertPayload,
+	videos *repository.VideoRepository,
+	job *repository.ConvertJob,
+	assetID int64,
+	videoPID uuid.UUID,
+	videoID string,
+) (bool, error) {
+	cancelled := job.Status == "cancelled"
+	if !cancelled && p.deps.ConvertProgress != nil {
+		req, err := p.deps.ConvertProgress.IsCancelRequested(ctx, payload.JobPublicID)
+		if err != nil {
+			return false, err
+		}
+		cancelled = req
+	}
+	if !cancelled {
+		return false, nil
+	}
+	p.cleanupHLSPrefix(ctx, videoPID)
+	_ = videos.UpdateHLSStatus(ctx, assetID, "failed")
+	if p.deps.ConvertProgress != nil {
+		_ = p.deps.ConvertProgress.Clear(ctx, videoID)
+		_ = p.deps.ConvertProgress.ClearCancel(ctx, payload.JobPublicID)
+	}
+	return true, nil
 }
 
 func (p *ConvertProcessor) convertLogFields(payload ConvertPayload, job *repository.ConvertJob, videoPID uuid.UUID) []zap.Field {

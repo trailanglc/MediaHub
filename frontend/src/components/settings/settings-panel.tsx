@@ -701,7 +701,7 @@ export function SettingsPanel() {
             <CardHeader>
               <CardTitle>Quota storage</CardTitle>
               <CardDescription>
-                Đặt 0 hoặc để trống = không giới hạn quota runtime (theo DB).
+                Đặt 0 hoặc để trống = không giới hạn. Khi có giá trị, upload bị chặn khi vượt quota workspace.
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">

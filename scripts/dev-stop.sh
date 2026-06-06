@@ -6,8 +6,8 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
 kill_sig() {
   local sig=$1
-  pkill "-$sig" -f "${ROOT}/scripts/dev-all.sh" 2>/dev/null || true
-  pkill "-$sig" -f 'mediahub-dev' 2>/dev/null || true
+  pkill "-$sig" -f "${ROOT}/scripts/dev-gateway.sh" 2>/dev/null || true
+  pkill "-$sig" -f 'go-build.*/b001/exe/gateway' 2>/dev/null || true
   pkill "-$sig" -f 'go-build.*/b001/exe/api' 2>/dev/null || true
   pkill "-$sig" -f 'go-build.*/b001/exe/scheduler' 2>/dev/null || true
   pkill "-$sig" -f 'go-build.*/b001/exe/worker' 2>/dev/null || true

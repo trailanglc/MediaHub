@@ -92,6 +92,12 @@ export type ComponentHealth = {
   details?: Record<string, string>;
 };
 
+export type HealthWarning = {
+  level: "warning" | "critical" | string;
+  code: string;
+  message: string;
+};
+
 export type HealthResponse = {
   status: string;
   timestamp: string;
@@ -122,6 +128,23 @@ export type HealthResponse = {
       used_percent: number;
     }>;
   };
+  warnings?: HealthWarning[];
+  resource_snapshot?: {
+    cpu_idle_percent: number;
+    ram_idle_percent: number;
+    redis_idle_percent: number;
+    headroom_percent: number;
+    pressure: number;
+    cpu_count: number;
+  };
+  resource_limits?: {
+    convert_slots: number;
+    defer_convert: boolean;
+    system_busy: boolean;
+    ffmpeg_threads: number;
+  };
+  queue_depth?: number;
+  queue_max_depth?: number;
   components: Record<string, ComponentHealth>;
 };
 

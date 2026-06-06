@@ -215,7 +215,9 @@ func writeVideoError(c *gin.Context, err error) {
 	case errors.Is(err, service.ErrVideoRetryNotAllowed):
 		c.JSON(http.StatusConflict, gin.H{"error": "conflict", "message": err.Error()})
 	case errors.Is(err, service.ErrSystemBusy):
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "system_busy", "message": "hệ thống đang quá tải, thử lại sau"})
+		WriteSystemBusy(c)
+	case errors.Is(err, service.ErrConvertQueueFull):
+		WriteQueueFull(c)
 	case errors.Is(err, service.ErrVideoInvalidVariants):
 		c.JSON(http.StatusBadRequest, gin.H{"error": "validation_error", "message": err.Error()})
 	case errors.Is(err, service.ErrVideoNotStreamable):

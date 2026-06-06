@@ -283,6 +283,10 @@ func writeIntegrationError(c *gin.Context, err error) {
 		errors.Is(err, service.ErrVideoConvertActive),
 		errors.Is(err, service.ErrVideoRetryNotAllowed):
 		c.JSON(http.StatusConflict, gin.H{"error": "conflict", "message": err.Error()})
+	case errors.Is(err, service.ErrSystemBusy):
+		WriteSystemBusy(c)
+	case errors.Is(err, service.ErrConvertQueueFull):
+		WriteQueueFull(c)
 	default:
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal_error", "message": err.Error()})
 	}

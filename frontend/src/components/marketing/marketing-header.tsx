@@ -3,7 +3,7 @@ import { Button } from "@/components/ui/button";
 
 const NAV = [
   { href: "/#features", label: "Tính năng" },
-  { href: "/docs/integration", label: "Tài liệu API" },
+  { href: "/docs", label: "Tài liệu" },
 ] as const;
 
 export function MarketingHeader() {

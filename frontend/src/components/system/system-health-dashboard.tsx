@@ -23,6 +23,8 @@ import {
 import { PageHeader } from "@/components/ui/page-header";
 import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { AlertTriangle } from "lucide-react";
 
 const REFRESH_MS = 15_000;
 
@@ -255,6 +257,45 @@ export function SystemHealthDashboard({
           message={`Không kết nối được API: ${(error as Error).message}`}
           onRetry={() => void refetch()}
         />
+      )}
+
+      {(data?.resource_limits?.system_busy ||
+        (data?.queue_max_depth != null &&
+          data.queue_max_depth > 0 &&
+          (data.queue_depth ?? 0) >= data.queue_max_depth * 0.9)) && (
+        <Alert variant="destructive">
+          <AlertTriangle className="h-4 w-4" />
+          <AlertTitle>Giới hạn tải đang kích hoạt</AlertTitle>
+          <AlertDescription className="text-pretty">
+            {data.resource_limits?.system_busy &&
+              "Governor báo system_busy — convert/tải nền đã giảm. "}
+            {data.queue_max_depth != null && data.queue_max_depth > 0 && (
+              <>
+                Hàng đợi convert: {data.queue_depth ?? 0}/{data.queue_max_depth}
+                {(data.queue_depth ?? 0) >= data.queue_max_depth * 0.9
+                  ? " (gần đầy)."
+                  : "."}
+              </>
+            )}
+          </AlertDescription>
+        </Alert>
+      )}
+
+      {data?.warnings && data.warnings.length > 0 && (
+        <div className="space-y-2">
+          {data.warnings.map((w) => (
+            <Alert
+              key={w.code}
+              variant={w.level === "critical" ? "destructive" : "default"}
+            >
+              <AlertTriangle className="h-4 w-4" />
+              <AlertTitle>
+                {w.level === "critical" ? "Quá tải" : "Cảnh báo"}
+              </AlertTitle>
+              <AlertDescription>{w.message}</AlertDescription>
+            </Alert>
+          ))}
+        </div>
       )}
 
       {data?.host && (

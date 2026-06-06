@@ -1,4 +1,5 @@
 import type { MetadataRoute } from "next";
+import { ALL_DOC_PAGES } from "@/lib/docs/manifest";
 
 function siteUrl(): string {
   if (process.env.NEXT_PUBLIC_APP_URL) {
@@ -13,6 +14,27 @@ function siteUrl(): string {
 export default function sitemap(): MetadataRoute.Sitemap {
   const base = siteUrl();
   const now = new Date();
+  const docUrls: MetadataRoute.Sitemap = [
+    {
+      url: `${base}/docs`,
+      lastModified: now,
+      changeFrequency: "weekly",
+      priority: 0.95,
+    },
+    {
+      url: `${base}/docs/api`,
+      lastModified: now,
+      changeFrequency: "weekly",
+      priority: 0.9,
+    },
+    ...ALL_DOC_PAGES.filter((p) => p.slug).map((p) => ({
+      url: `${base}/docs/${p.slug}`,
+      lastModified: now,
+      changeFrequency: "weekly" as const,
+      priority: p.slug.startsWith("integration") ? 0.85 : 0.7,
+    })),
+  ];
+
   return [
     {
       url: base,
@@ -20,12 +42,7 @@ export default function sitemap(): MetadataRoute.Sitemap {
       changeFrequency: "monthly",
       priority: 1,
     },
-    {
-      url: `${base}/docs/integration`,
-      lastModified: now,
-      changeFrequency: "weekly",
-      priority: 0.9,
-    },
+    ...docUrls,
     {
       url: `${base}/login`,
       lastModified: now,

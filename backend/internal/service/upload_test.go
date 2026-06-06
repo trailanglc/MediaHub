@@ -32,7 +32,7 @@ func TestUploadInit(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	pool, err := postgres.NewPool(ctx, dsn)
+	pool, err := postgres.NewPool(ctx, dsn, 0, 0)
 	if err != nil {
 		t.Skipf("postgres: %v", err)
 	}

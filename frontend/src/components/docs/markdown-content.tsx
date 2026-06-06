@@ -1,7 +1,18 @@
 "use client";
 
 import Link from "next/link";
+import { CheckIcon, CopyIcon } from "lucide-react";
+import { useCallback, useState } from "react";
 import { cn } from "@/lib/utils";
+
+function slugify(text: string): string {
+  return text
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "");
+}
 
 function renderInline(text: string): React.ReactNode[] {
   const parts: React.ReactNode[] = [];
@@ -27,14 +38,19 @@ function renderInline(text: string): React.ReactNode[] {
       if (linkMatch) {
         const [, label, href] = linkMatch;
         const external = href.startsWith("http");
-        if (external) {
+        const download =
+          href.endsWith(".yaml") || href.endsWith(".json");
+        if (external || download) {
           parts.push(
             <a
               key={m.index}
               href={href}
               className="text-primary underline-offset-4 hover:underline"
-              target="_blank"
-              rel="noreferrer"
+              {...(external
+                ? { target: "_blank", rel: "noreferrer" }
+                : download
+                  ? { download: true }
+                  : {})}
             >
               {label}
             </a>,
@@ -56,6 +72,88 @@ function renderInline(text: string): React.ReactNode[] {
   }
   if (last < text.length) parts.push(text.slice(last));
   return parts;
+}
+
+function CopyCodeBlock({
+  code,
+  lang,
+}: {
+  code: string;
+  lang: string;
+}) {
+  const [copied, setCopied] = useState(false);
+
+  const copy = useCallback(async () => {
+    await navigator.clipboard.writeText(code);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  }, [code]);
+
+  return (
+    <div className="group relative">
+      <button
+        type="button"
+        onClick={copy}
+        className="absolute right-2 top-2 rounded-md border bg-background/90 p-1.5 opacity-0 transition-opacity group-hover:opacity-100"
+        aria-label="Copy code"
+      >
+        {copied ? (
+          <CheckIcon className="size-3.5 text-green-600" />
+        ) : (
+          <CopyIcon className="size-3.5" />
+        )}
+      </button>
+      <pre className="overflow-x-auto rounded-lg border bg-muted/50 p-4 text-xs leading-relaxed">
+        <code className={lang ? `language-${lang}` : undefined}>{code}</code>
+      </pre>
+    </div>
+  );
+}
+
+function Heading({
+  level,
+  text,
+}: {
+  level: 1 | 2 | 3 | 4;
+  text: string;
+}) {
+  const id = slugify(text.replace(/\*\*/g, "").replace(/`/g, ""));
+  const content = renderInline(text);
+  const className =
+    level === 1
+      ? "text-2xl font-bold tracking-tight scroll-mt-24"
+      : level === 2
+        ? "mt-8 border-b pb-2 text-lg font-semibold scroll-mt-24"
+        : level === 3
+          ? "mt-6 text-base font-semibold scroll-mt-24"
+          : "mt-4 text-sm font-semibold scroll-mt-24";
+
+  if (level === 1) {
+    return (
+      <h1 id={id} className={className}>
+        {content}
+      </h1>
+    );
+  }
+  if (level === 2) {
+    return (
+      <h2 id={id} className={className}>
+        {content}
+      </h2>
+    );
+  }
+  if (level === 3) {
+    return (
+      <h3 id={id} className={className}>
+        {content}
+      </h3>
+    );
+  }
+  return (
+    <h4 id={id} className={className}>
+      {content}
+    </h4>
+  );
 }
 
 export function MarkdownContent({
@@ -82,15 +180,9 @@ export function MarkdownContent({
         i++;
       }
       i++;
+      const joined = code.join("\n");
       nodes.push(
-        <pre
-          key={key++}
-          className="overflow-x-auto rounded-lg border bg-muted/50 p-4 text-xs leading-relaxed"
-        >
-          <code className={lang ? `language-${lang}` : undefined}>
-            {code.join("\n")}
-          </code>
-        </pre>,
+        <CopyCodeBlock key={key++} lang={lang} code={joined} />,
       );
       continue;
     }
@@ -141,30 +233,23 @@ export function MarkdownContent({
       continue;
     }
 
+    if (line.startsWith("#### ")) {
+      nodes.push(<Heading key={key++} level={4} text={line.slice(5)} />);
+      i++;
+      continue;
+    }
     if (line.startsWith("### ")) {
-      nodes.push(
-        <h3 key={key++} className="mt-6 text-base font-semibold">
-          {renderInline(line.slice(4))}
-        </h3>,
-      );
+      nodes.push(<Heading key={key++} level={3} text={line.slice(4)} />);
       i++;
       continue;
     }
     if (line.startsWith("## ")) {
-      nodes.push(
-        <h2 key={key++} className="mt-8 border-b pb-2 text-lg font-semibold">
-          {renderInline(line.slice(3))}
-        </h2>,
-      );
+      nodes.push(<Heading key={key++} level={2} text={line.slice(3)} />);
       i++;
       continue;
     }
     if (line.startsWith("# ")) {
-      nodes.push(
-        <h1 key={key++} className="text-2xl font-bold tracking-tight">
-          {renderInline(line.slice(2))}
-        </h1>,
-      );
+      nodes.push(<Heading key={key++} level={1} text={line.slice(2)} />);
       i++;
       continue;
     }

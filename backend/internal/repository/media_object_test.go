@@ -16,7 +16,7 @@ func testPool(t *testing.T) *repository.MediaObjectRepository {
 	if dsn == "" {
 		dsn = "postgres://mediahub:mediahub@localhost:5432/mediahub?sslmode=disable"
 	}
-	pool, err := postgres.NewPool(context.Background(), dsn)
+	pool, err := postgres.NewPool(context.Background(), dsn, 0, 0)
 	if err != nil {
 		t.Skipf("postgres unavailable: %v", err)
 	}

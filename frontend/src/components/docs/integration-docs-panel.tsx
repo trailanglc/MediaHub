@@ -55,21 +55,28 @@ export function IntegrationDocsPanel({
         )}
         <Button
           nativeButton={false}
+          render={<Link href="/docs/api" />}
+          variant="outline"
+          size="sm"
+        >
+          API Reference
+        </Button>
+        <Button
+          nativeButton={false}
           render={<a href="/docs/openapi.yaml" download />}
           variant="outline"
           size="sm"
         >
           <DownloadIcon className="mr-1.5 size-3.5" />
-          OpenAPI (YAML)
+          OpenAPI
         </Button>
         <Button
           nativeButton={false}
-          render={<a href="/docs/postman-collection.json" download />}
+          render={<Link href="/docs" />}
           variant="outline"
           size="sm"
         >
-          <DownloadIcon className="mr-1.5 size-3.5" />
-          Postman collection
+          Tất cả tài liệu
         </Button>
       </div>
 

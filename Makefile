@@ -1,4 +1,4 @@
-.PHONY: infra-up infra-down infra-reset migrate-up migrate-down reset reset-data api scheduler worker fe dev dev-all dev-full orphan-cleanup orphan-cleanup-apply test test-backend
+.PHONY: infra-up infra-down infra-reset migrate-up migrate-down reset reset-data gateway gateaway api scheduler worker fe dev dev-gateway dev-full orphan-cleanup orphan-cleanup-apply test test-backend docs-sync
 
 test: test-backend
 
@@ -50,6 +50,14 @@ reset-data:
 	fi
 	cd backend && go run ./cmd/reset -confirm
 
+# Entry point backend (dev + production): kiểm tra môi trường + API + scheduler + worker.
+gateway:
+	cd backend && go run ./cmd/gateway
+
+# Alias lỗi chính tả phổ biến
+gateaway: gateway
+
+# Chạy riêng từng thành phần (debug).
 api:
 	cd backend && go run ./cmd/api
 
@@ -72,19 +80,40 @@ orphan-cleanup-apply:
 fe:
 	cd frontend && pnpm dev
 
-# Một terminal: API + scheduler + worker + Next.js (cần infra + migrate trước).
-dev-all:
-	@chmod +x scripts/dev-all.sh
-	@exec ./scripts/dev-all.sh
+# Gateway backend: kiểm tra môi trường + API + scheduler + worker (một terminal).
+# Frontend chạy riêng: make fe
+dev-gateway:
+	@chmod +x scripts/dev-gateway.sh
+	@exec ./scripts/dev-gateway.sh
 
 # Dừng stack dev sót sau Ctrl+C (go-build binary, go run, next dev).
 dev-stop:
 	@chmod +x scripts/dev-stop.sh
 	@./scripts/dev-stop.sh
 
-# Infra + migrate + dev-all (khởi động nhanh toàn bộ stack dev).
-dev-full: infra-up migrate-up dev-all
+# Infra + migrate + gateway backend (khởi động nhanh stack dev).
+dev-full: infra-up migrate-up dev-gateway
 
 dev: infra-up migrate-up
-	@echo "Chạy tất cả trong một terminal: make dev-all"
-	@echo "Hoặc từng service: make api | make scheduler | make worker | make fe"
+	@echo "Backend: make gateway  (hoặc make dev-gateway)"
+	@echo "Frontend (terminal khác): make fe"
+	@echo "Debug từng thành phần: make api | make scheduler | make worker"
+
+# Đồng bộ docs/ → frontend/public/docs/ (markdown + OpenAPI + Postman).
+docs-sync:
+	@mkdir -p frontend/public/docs
+	rsync -a --delete \
+		--include='README.md' \
+		--include='getting-started/***' \
+		--include='configuration/***' \
+		--include='integration/***' \
+		--include='usage/***' \
+		--include='reference/***' \
+		--include='api/' \
+		--include='api/**' \
+		--exclude='*' \
+		docs/ frontend/public/docs/
+	cp docs/api/openapi.yaml frontend/public/docs/openapi.yaml
+	cp docs/api/postman-collection.json frontend/public/docs/postman-collection.json
+	@rm -f frontend/public/docs/integration.md
+	@echo "docs-sync: frontend/public/docs/ updated"

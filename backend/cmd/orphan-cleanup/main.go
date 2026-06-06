@@ -39,7 +39,7 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
 
-	pool, err := postgres.NewPool(ctx, cfg.DBDSN)
+	pool, err := postgres.NewPool(ctx, cfg.DBDSN, cfg.DBMaxConns, cfg.DBMinConns)
 	if err != nil {
 		log.Fatalf("postgres: %v", err)
 	}

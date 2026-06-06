@@ -19,7 +19,7 @@ func testPool(t *testing.T) *pgxpool.Pool {
 	if dsn == "" {
 		dsn = "postgres://mediahub:Anhtuanlc.12@localhost:5432/mediahub?sslmode=disable"
 	}
-	pool, err := postgres.NewPool(context.Background(), dsn)
+	pool, err := postgres.NewPool(context.Background(), dsn, 0, 0)
 	if err != nil {
 		t.Skipf("postgres not available: %v", err)
 	}

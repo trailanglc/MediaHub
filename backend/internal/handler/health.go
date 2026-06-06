@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"os"
 	"runtime"
@@ -10,7 +11,9 @@ import (
 	"time"
 
 	"github.com/anhtuanlc/mediahub/internal/observability"
+	"github.com/anhtuanlc/mediahub/internal/platform/capacity"
 	"github.com/anhtuanlc/mediahub/internal/platform/resource"
+	"github.com/anhtuanlc/mediahub/internal/service"
 	"github.com/anhtuanlc/mediahub/internal/platform/cache"
 	"github.com/anhtuanlc/mediahub/internal/platform/upload"
 	"github.com/anhtuanlc/mediahub/internal/storage"
@@ -28,12 +31,19 @@ type HealthHandler struct {
 	MetricsCacheTTL time.Duration
 	HostCache       *cache.TTLCache[*observability.HostStats]
 	Resources       *resource.Reader
+	ConvertQueue    *service.ConvertEnqueue
 }
 
 type componentHealth struct {
 	Status  string            `json:"status"`
 	Error   string            `json:"error,omitempty"`
 	Details map[string]string `json:"details,omitempty"`
+}
+
+type HealthWarning struct {
+	Level   string `json:"level"`
+	Code    string `json:"code"`
+	Message string `json:"message"`
 }
 
 type systemHealthResponse struct {
@@ -46,7 +56,11 @@ type systemHealthResponse struct {
 	MetricsCachedAt         *time.Time                 `json:"metrics_cached_at,omitempty"`
 	UploadMetrics           map[string]uint64          `json:"upload_metrics,omitempty"`
 	Host                    *observability.HostStats   `json:"host,omitempty"`
+	ResourceSnapshot        *resource.Snapshot         `json:"resource_snapshot,omitempty"`
 	ResourceLimits          *resource.Limits           `json:"resource_limits,omitempty"`
+	QueueDepth              int                        `json:"queue_depth,omitempty"`
+	QueueMaxDepth           int                        `json:"queue_max_depth,omitempty"`
+	Warnings                []HealthWarning            `json:"warnings,omitempty"`
 	Components              map[string]componentHealth `json:"components"`
 }
 
@@ -56,10 +70,21 @@ func (h *HealthHandler) SystemHealth(c *gin.Context) {
 
 	hostStats, _ := h.cachedHostStats(ctx)
 
+	var resSnap *resource.Snapshot
 	var resLimits *resource.Limits
 	if h.Resources != nil && h.Resources.Enabled {
-		if _, lim, err := h.Resources.Current(ctx); err == nil {
+		if snap, lim, err := h.Resources.Current(ctx); err == nil {
+			resSnap = snap
 			resLimits = &lim
+		}
+	}
+
+	queueDepth := 0
+	queueMax := 0
+	if h.ConvertQueue != nil {
+		queueMax = h.ConvertQueue.MaxDepth()
+		if depth, err := h.ConvertQueue.PendingDepth(ctx); err == nil {
+			queueDepth = depth
 		}
 	}
 
@@ -95,6 +120,16 @@ func (h *HealthHandler) SystemHealth(c *gin.Context) {
 		ttlSec = int(h.MetricsCacheTTL.Seconds())
 	}
 
+	warnings := buildWarnings(hostStats, components["storage"])
+	if overall == "healthy" {
+		for _, w := range warnings {
+			if w.Level == "critical" {
+				overall = "degraded"
+				break
+			}
+		}
+	}
+
 	c.JSON(http.StatusOK, systemHealthResponse{
 		Status:                 overall,
 		Timestamp:              time.Now().UTC(),
@@ -105,9 +140,63 @@ func (h *HealthHandler) SystemHealth(c *gin.Context) {
 		MetricsCachedAt:        metricsCachedAt,
 		UploadMetrics:          upload.Default.Snapshot(),
 		Host:                   hostStats,
+		ResourceSnapshot:       resSnap,
 		ResourceLimits:         resLimits,
+		QueueDepth:             queueDepth,
+		QueueMaxDepth:          queueMax,
+		Warnings:               warnings,
 		Components:             components,
 	})
+}
+
+func buildWarnings(host *observability.HostStats, storage componentHealth) []HealthWarning {
+	var out []HealthWarning
+
+	if host != nil {
+		if lvl := capacity.UsageLevel(host.Memory.UsedPercent); lvl != "" {
+			msg := "RAM máy chủ đang cao — hệ thống sẽ giảm tải khi vượt 90%."
+			if lvl == "critical" {
+				msg = "RAM máy chủ vượt 90% — đã giảm convert và tải nền."
+			}
+			out = append(out, HealthWarning{Level: lvl, Code: "host_ram_high", Message: msg})
+		}
+		if lvl := capacity.UsageLevel(host.CPUPercent); lvl != "" {
+			msg := "CPU máy chủ đang cao — theo dõi thêm hoặc giảm CONVERT_MAX_CONCURRENT."
+			if lvl == "critical" {
+				msg = "CPU máy chủ vượt 90% — đã giảm convert và tải nền."
+			}
+			out = append(out, HealthWarning{Level: lvl, Code: "host_cpu_high", Message: msg})
+		}
+		for _, d := range host.Disks {
+			if lvl := capacity.UsageLevel(d.UsedPercent); lvl != "" {
+				msg := fmt.Sprintf("Ổ đĩa %s đang cao (%.1f%%) — dọn dẹp hoặc mở rộng dung lượng.", d.Path, d.UsedPercent)
+				if lvl == "critical" {
+					msg = fmt.Sprintf("Ổ đĩa %s vượt 90%% — nguy cơ lỗi ghi file/convert.", d.Path)
+				}
+				out = append(out, HealthWarning{Level: lvl, Code: "host_disk_high", Message: msg})
+			}
+		}
+	}
+
+	if storage.Details != nil {
+		if raw := storage.Details["used_percent"]; raw != "" {
+			if pct, err := strconv.ParseFloat(raw, 64); err == nil {
+				if lvl := capacity.UsageLevel(pct); lvl != "" {
+					bucket := storage.Details["bucket"]
+					msg := "Object storage (MinIO) đang cao — cân nhắc dọn media cũ."
+					if bucket != "" {
+						msg = fmt.Sprintf("Bucket %s đang cao (%.1f%%).", bucket, pct)
+					}
+					if lvl == "critical" {
+						msg = "Object storage gần đầy — upload/convert có thể thất bại."
+					}
+					out = append(out, HealthWarning{Level: lvl, Code: "storage_disk_high", Message: msg})
+				}
+			}
+		}
+	}
+
+	return out
 }
 
 func (h *HealthHandler) cachedHostStats(ctx context.Context) (*observability.HostStats, error) {

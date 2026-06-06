@@ -6,20 +6,11 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/anhtuanlc/mediahub/internal/authz"
-	"github.com/anhtuanlc/mediahub/internal/background"
 	"github.com/anhtuanlc/mediahub/internal/config"
 	"github.com/anhtuanlc/mediahub/internal/platform"
-	"github.com/anhtuanlc/mediahub/internal/platform/postgres"
-	"github.com/anhtuanlc/mediahub/internal/platform/rediscache"
-	platredis "github.com/anhtuanlc/mediahub/internal/platform/redis"
-	"github.com/anhtuanlc/mediahub/internal/platform/resource"
-	"github.com/anhtuanlc/mediahub/internal/platform/upload"
-	"github.com/anhtuanlc/mediahub/internal/repository"
-	"github.com/anhtuanlc/mediahub/internal/service"
-	"github.com/anhtuanlc/mediahub/internal/storage"
+	"github.com/anhtuanlc/mediahub/internal/platform/startup"
+	"github.com/anhtuanlc/mediahub/internal/runtime"
 	"github.com/joho/godotenv"
-	"go.uber.org/zap"
 )
 
 func main() {
@@ -39,52 +30,13 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	pool, err := postgres.NewPool(ctx, cfg.DBDSN)
+	shared, err := runtime.Bootstrap(ctx, cfg, logger)
 	if err != nil {
-		logger.Fatal("postgres", zap.Error(err))
+		startup.Fatal(logger, "Không thể khởi động scheduler — kiểm tra môi trường thất bại", err)
 	}
-	defer pool.Close()
+	defer shared.Close()
 
-	redisClient := platredis.NewClientFromConfig(cfg)
-	defer redisClient.Close()
-
-	store, err := storage.NewS3Storage(ctx, cfg.Storage, cfg.HealthMetricsCacheTTL)
-	if err != nil {
-		logger.Fatal("storage", zap.Error(err))
+	if err := runtime.RunScheduler(ctx, shared); err != nil && err != context.Canceled {
+		startup.Fatal(logger, "Scheduler thoát bất thường", err)
 	}
-
-	mediaRepo := repository.NewMediaObjectRepository(pool)
-	videoRepo := repository.NewVideoRepository(pool)
-	refreshRepo := repository.NewRefreshTokenRepository(pool)
-	settingsRepo := repository.NewSettingsRepository(pool)
-	auditRepo := repository.NewAuditRepository(pool)
-	permRepo := repository.NewPermissionRepository(pool)
-	uploadRepo := repository.NewUploadSessionRepository(pool)
-	deletionRepo := repository.NewStorageDeletionRepository(pool)
-
-	settingsSvc := service.NewSettingsService(settingsRepo, auditRepo, cfg, rediscache.NewStore(redisClient))
-	authzSvc := authz.NewService(permRepo)
-	resReader := resource.NewReaderFromConfig(cfg, redisClient)
-	storageCleanup := service.NewStorageCleanupService(deletionRepo, store, resReader)
-	thumbnailSvc := service.NewThumbnailService(mediaRepo, store)
-	mediaSvc := service.NewMediaObjectService(mediaRepo, settingsSvc, authzSvc, auditRepo, store, storageCleanup, thumbnailSvc)
-	uploadLimiter := upload.NewRateLimiter(redisClient, cfg.UploadInitPerMinute)
-	uploadSvc := service.NewUploadService(uploadRepo, mediaSvc, pool, store, thumbnailSvc, uploadLimiter, cfg.MaxPendingUploadsPerUser, cfg.PresignedPutURLTTL)
-
-	sched := &background.Scheduler{
-		Log:            logger,
-		Upload:         uploadSvc,
-		StorageCleanup: storageCleanup,
-		DeletionRepo:   deletionRepo,
-		Media:          mediaSvc,
-		MediaRepo:      mediaRepo,
-		Settings:       settingsSvc,
-		Videos:         videoRepo,
-		Refresh:        refreshRepo,
-		Resources:      resReader,
-	}
-
-	logger.Info("scheduler starting")
-	sched.Run(ctx)
-	logger.Info("scheduler stopped")
 }

@@ -22,19 +22,25 @@ Monorepo gồm **backend** (Go, Gin) và **frontend** (Next.js).
 
 | Tài liệu | Nội dung |
 |----------|----------|
-| [docs/INSTALL.md](docs/INSTALL.md) | Cài đặt, Docker, migrate, chạy API + scheduler + frontend |
-| [docs/USAGE.md](docs/USAGE.md) | Auth, members, File Manager, settings, kiểm thử |
-| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Bản đồ thư mục, luồng request, vai trò `cmd/*` |
+| [docs/README.md](docs/README.md) | **Hub tổng** — cài đặt, cấu hình, kết nối API |
+| [docs/getting-started/](docs/getting-started/) | Cài đặt và chạy lần đầu |
+| [docs/configuration/](docs/configuration/) | Biến môi trường, CDN, production |
+| [docs/integration/](docs/integration/) | Integration API `/api/v1` cho CMS |
+| [docs/usage/](docs/usage/) | Dashboard Owner/Member |
+| [docs/reference/ARCHITECTURE.md](docs/reference/ARCHITECTURE.md) | Bản đồ thư mục, luồng request |
 | [mediahub_production_spec.md](mediahub_production_spec.md) | Đặc tả kiến trúc / production |
 | [LICENSE](LICENSE) | Điều khoản sử dụng, phi thương mại, cấp phép thương mại |
+
+Trên web (sau `make fe`): http://localhost:3000/docs
 
 ## Cấu trúc repo
 
 ```txt
 backend/       Go API và binary nền (xem docs/ARCHITECTURE.md)
-  cmd/api          HTTP API (Gin)
-  cmd/scheduler    Bảo trì định kỳ (trash, storage cleanup, …)
-  cmd/worker       Hàng đợi Asynq (video convert — khi bật)
+  cmd/gateway      Entry backend: kiểm tra môi trường + API + scheduler + worker
+  cmd/api          HTTP API riêng (debug)
+  cmd/scheduler    Bảo trì định kỳ riêng (debug)
+  cmd/worker       Hàng đợi Asynq riêng (debug)
   cmd/migrate      Database migrations
   cmd/reset        Xóa dữ liệu ứng dụng (giữ volume Docker)
   cmd/orphan-cleanup  Quét blob MinIO không còn tham chiếu DB
@@ -53,12 +59,14 @@ cp deployments/.env.example deployments/.env
 cp backend/.env.example backend/.env
 cp frontend/.env.example frontend/.env.local
 
-make dev-full     # infra + migrate + API + scheduler + worker + FE (một terminal)
+make dev-full     # infra + migrate + make gateway
+make fe           # frontend — terminal khác
 
-# Hoặc từng bước / nhiều terminal: xem docs/INSTALL.md
+# Chi tiết: docs/getting-started/02-installation.md
+make docs-sync   # đồng bộ tài liệu sang frontend (trước build)
 ```
 
-Mở http://localhost:3000/setup để tạo Owner. Chi tiết: [docs/INSTALL.md](docs/INSTALL.md).
+Mở http://localhost:3000/setup để tạo Owner. Chi tiết: [docs/README.md](docs/README.md).
 
 ## Giấy phép (tóm tắt)
 

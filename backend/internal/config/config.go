@@ -22,7 +22,9 @@ type Config struct {
 	CDNPublicURL  string
 	APIAddr       string
 
-	DBDSN     string
+	DBDSN      string
+	DBMaxConns int
+	DBMinConns int
 	RedisAddr string
 	RedisPoolSize        int
 	RedisMinIdleConns    int
@@ -42,8 +44,9 @@ type Config struct {
 	FFmpegPath          string
 	FFprobePath         string
 	StreamSigningSecret string
-	ConvertMaxConcurrent int
-	ConvertMinConcurrent int
+	ConvertMaxConcurrent  int
+	ConvertMinConcurrent  int
+	ConvertQueueMaxDepth int
 	ConvertJobTimeout    time.Duration
 	StreamRateLimitPerMin int
 	// StreamSegmentRateLimitPerMin caps origin segment fetches per IP/video per minute
@@ -82,6 +85,8 @@ type Config struct {
 	ResourceRAMMinIdlePercent   int
 	ResourceRedisMaxUsedPercent int
 	ResourceGovernorPublish     bool
+
+	autoscaleNotes []string
 }
 
 type StorageConfig struct {
@@ -105,8 +110,10 @@ func Load() (*Config, error) {
 		APIAddr:             getEnv("API_ADDR", ":8080"),
 		DBDSN:               os.Getenv("DB_DSN"),
 		RedisAddr:           getEnv("REDIS_ADDR", "localhost:6379"),
-		RedisPoolSize:        getEnvInt("REDIS_POOL_SIZE", 32),
-		RedisMinIdleConns:    getEnvInt("REDIS_MIN_IDLE_CONNS", 8),
+		DBMaxConns:           getEnvInt("DB_MAX_CONNS", 0),
+		DBMinConns:           getEnvInt("DB_MIN_CONNS", 0),
+		RedisPoolSize:        getEnvInt("REDIS_POOL_SIZE", 0),
+		RedisMinIdleConns:    getEnvInt("REDIS_MIN_IDLE_CONNS", 0),
 		RedisReadTimeout:     getEnvDuration("REDIS_READ_TIMEOUT", 3*time.Second),
 		RedisWriteTimeout:    getEnvDuration("REDIS_WRITE_TIMEOUT", 3*time.Second),
 		JWTSecret:           os.Getenv("JWT_SECRET"),
@@ -120,8 +127,9 @@ func Load() (*Config, error) {
 		FFmpegPath:          getEnv("FFMPEG_PATH", "/usr/bin/ffmpeg"),
 		FFprobePath:           getEnv("FFPROBE_PATH", "/usr/bin/ffprobe"),
 		StreamSigningSecret:   os.Getenv("STREAM_SIGNING_SECRET"),
-		ConvertMaxConcurrent:  getEnvInt("CONVERT_MAX_CONCURRENT", 2),
-		ConvertMinConcurrent:  getEnvInt("CONVERT_MIN_CONCURRENT", 1),
+		ConvertMaxConcurrent:   getEnvInt("CONVERT_MAX_CONCURRENT", 0),
+		ConvertMinConcurrent:   getEnvInt("CONVERT_MIN_CONCURRENT", 0),
+		ConvertQueueMaxDepth:   getEnvInt("CONVERT_QUEUE_MAX_DEPTH", 0),
 		ConvertJobTimeout:     getEnvDuration("CONVERT_JOB_TIMEOUT", 2*time.Hour),
 		StreamRateLimitPerMin: getEnvInt("STREAM_RATE_LIMIT_PER_MIN", 120),
 		StreamSegmentRateLimitPerMin: getEnvInt("STREAM_SEGMENT_RATE_LIMIT_PER_MIN", 0),
@@ -131,14 +139,14 @@ func Load() (*Config, error) {
 		ImageTransformCacheTTL:       getEnvDuration("IMAGE_TRANSFORM_CACHE_TTL", 24*time.Hour),
 		StreamInternalRedirectPrefix: strings.TrimRight(os.Getenv("STREAM_INTERNAL_REDIRECT_PREFIX"), "/"),
 		HealthMetricsCacheTTL: defaultHealthMetricsCacheTTL,
-		UploadInitPerMinute:      getEnvInt("UPLOAD_INIT_PER_MINUTE", 60),
+		UploadInitPerMinute:      getEnvInt("UPLOAD_INIT_PER_MINUTE", 0),
 		MaxPendingUploadsPerUser: getEnvInt("UPLOAD_MAX_PENDING_PER_USER", 10),
 		APIKeyUploadInitPerMin:   getEnvInt("API_KEY_UPLOAD_INIT_PER_MIN", 120),
 		APIKeyConvertPerHour:     getEnvInt("API_KEY_CONVERT_PER_HOUR", 60),
 		ResourceGovernorEnabled:     getEnvBool("RESOURCE_GOVERNOR_ENABLED", true),
 		ResourceSampleInterval:      getEnvDuration("RESOURCE_SAMPLE_INTERVAL", 10*time.Second),
-		ResourceCPUReservePercent:   getEnvInt("RESOURCE_CPU_RESERVE_PERCENT", 40),
-		ResourceRAMMinIdlePercent:   getEnvInt("RESOURCE_RAM_MIN_IDLE_PERCENT", 15),
+		ResourceCPUReservePercent:   getEnvInt("RESOURCE_CPU_RESERVE_PERCENT", 0),
+		ResourceRAMMinIdlePercent:   getEnvInt("RESOURCE_RAM_MIN_IDLE_PERCENT", 0),
 		ResourceRedisMaxUsedPercent: getEnvInt("RESOURCE_REDIS_MAX_USED_PERCENT", 85),
 		ResourceGovernorPublish:     getEnvBool("RESOURCE_GOVERNOR_PUBLISH", false),
 		Storage: StorageConfig{
@@ -177,6 +185,8 @@ func Load() (*Config, error) {
 
 	cfg.RedisFailClosed = requireSecrets
 	cfg.TrustedProxies = parseTrustedProxies(os.Getenv("TRUSTED_PROXIES"))
+
+	applyAutoscale(cfg)
 
 	return cfg, nil
 }

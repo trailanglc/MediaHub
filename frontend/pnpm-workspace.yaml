@@ -1,6 +1,7 @@
 allowBuilds:
   sharp: true
   unrs-resolver: true
+  vue-demi: set this to true or false
 ignoredBuiltDependencies:
   - sharp
   - unrs-resolver

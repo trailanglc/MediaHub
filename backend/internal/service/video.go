@@ -393,8 +393,19 @@ func (s *VideoService) StartConvert(ctx context.Context, userID int64, role, ip,
 		return nil, ErrVideoConvertActive
 	}
 	if s.resources != nil && s.resources.Enabled {
-		if _, lim, err := s.resources.Current(ctx); err == nil && lim.SystemBusy {
-			return nil, ErrSystemBusy
+		if _, lim, err := s.resources.Current(ctx); err == nil {
+			if lim.SystemBusy || lim.DeferConvert {
+				return nil, ErrSystemBusy
+			}
+		}
+	}
+	if s.enqueue != nil && s.enqueue.MaxDepth() > 0 {
+		depth, err := s.enqueue.PendingDepth(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if depth >= s.enqueue.MaxDepth() {
+			return nil, ErrConvertQueueFull
 		}
 	}
 	src := transcode.SourceProfile{}

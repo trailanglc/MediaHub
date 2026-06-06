@@ -15,6 +15,9 @@ export function MarketingFooter() {
           className="flex flex-wrap gap-x-6 gap-y-2 text-sm text-muted-foreground"
           aria-label="Footer"
         >
+          <Link href="/docs" className="hover:text-foreground">
+            Tài liệu
+          </Link>
           <Link href="/docs/integration" className="hover:text-foreground">
             Integration API
           </Link>

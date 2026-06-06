@@ -3,6 +3,8 @@ package resource
 import (
 	"math"
 	"time"
+
+	"github.com/anhtuanlc/mediahub/internal/platform/capacity"
 )
 
 // PolicyConfig holds tunables for limit derivation.
@@ -40,7 +42,7 @@ func DefaultPolicyConfig(convertMin, convertMax, cpuReserve, ramMinIdle, redisMa
 		SchedulerBatchMax:       50,
 		StorageSlotsMin:         2,
 		StorageSlotsMax:         8,
-		BusyPressureThreshold:   0.85,
+		BusyPressureThreshold:   1 - capacity.MinIdlePercentForMaxUsage()/100,
 	}
 }
 
@@ -52,9 +54,13 @@ func LimitsFromSnapshot(snap *Snapshot, pc PolicyConfig) Limits {
 	}
 
 	headroom := snap.HeadroomPercent
+	minIdle := capacity.MinIdlePercentForMaxUsage()
 	target := float64(pc.CPUReserveTargetPercent)
+	if target < minIdle {
+		target = minIdle
+	}
 	if target <= 0 {
-		target = 40
+		target = minIdle
 	}
 
 	scale := headroom / target
@@ -62,6 +68,9 @@ func LimitsFromSnapshot(snap *Snapshot, pc PolicyConfig) Limits {
 		scale = 1
 	}
 	if scale < 0 {
+		scale = 0
+	}
+	if headroom < minIdle {
 		scale = 0
 	}
 
@@ -101,9 +110,13 @@ func LimitsFromSnapshot(snap *Snapshot, pc PolicyConfig) Limits {
 	slotSpan := float64(pc.StorageSlotsMax - pc.StorageSlotsMin)
 	immSlots := pc.StorageSlotsMin + int(math.Floor(slotSpan*scale+0.5))
 
-	deferConvert := snap.RAMIdlePercent < float64(pc.RAMMinIdlePercent)
+	ramMinIdle := float64(pc.RAMMinIdlePercent)
+	if ramMinIdle < minIdle {
+		ramMinIdle = minIdle
+	}
+	deferConvert := snap.RAMIdlePercent < ramMinIdle || snap.CPUIdlePercent < minIdle
 	skipSet := redisUnderPressure(snap.RedisIdlePercent, pc.RedisMaxUsedPercent)
-	busy := snap.Pressure >= pc.BusyPressureThreshold
+	busy := snap.Pressure >= pc.BusyPressureThreshold || headroom < minIdle
 
 	return Limits{
 		ConvertSlots:           slots,

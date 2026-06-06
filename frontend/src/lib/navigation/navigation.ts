@@ -31,6 +31,7 @@ export const NAV_GROUPS: NavGroup[] = [
     label: "Hệ thống",
     items: [
       { href: "/system/health", label: "System Health", ownerOnly: true },
+      { href: "/system/audit-logs", label: "Audit Logs", ownerOnly: true },
       { href: "/system/storage", label: "Storage", ownerOnly: true },
       { href: "/system/queue", label: "Queue", ownerOnly: true },
     ],
@@ -48,6 +49,7 @@ export const BREADCRUMB_LABELS: Record<string, string> = {
   security: "Security",
   system: "System",
   health: "Health",
+  "audit-logs": "Audit Logs",
   storage: "Storage",
   queue: "Queue",
 };
@@ -77,4 +79,11 @@ export function filterNavGroups(showOwnerNav: boolean): NavGroup[] {
     ...group,
     items: group.items.filter((item) => !item.ownerOnly || showOwnerNav),
   })).filter((group) => group.items.length > 0);
+}
+
+/** Audit logs dashboard — Owner only (UI + API). */
+export const AUDIT_LOGS_PATH = "/system/audit-logs";
+
+export function isAuditLogsPath(pathname: string): boolean {
+  return pathname === AUDIT_LOGS_PATH || pathname.startsWith(`${AUDIT_LOGS_PATH}/`);
 }

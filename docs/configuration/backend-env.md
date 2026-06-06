@@ -7,6 +7,7 @@ File: `backend/.env` — copy từ `backend/.env.example`.
 | Biến | Mặc định | Mô tả |
 |------|----------|--------|
 | `APP_ENV` | `development` | `production` bật chế độ bảo mật nghiêm (Redis fail-closed, …) |
+| `LOG_LEVEL` | `debug` (dev) / `info` (prod) | Mức app log zap: `debug`, `info`, `warn`, `error` — stdout JSON ở production |
 | `APP_URL` | `http://localhost:3000` | URL frontend — CORS, oEmbed allowlist |
 | `API_PUBLIC_URL` | `http://localhost:8080` | Base URL signed link HLS, stream |
 | `CDN_PUBLIC_URL` | *(trống)* | CDN cho `/assets`, `/embed` — xem [Storage & CDN](storage-cdn.md) |

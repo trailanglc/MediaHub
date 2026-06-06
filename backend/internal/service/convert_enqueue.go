@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/anhtuanlc/mediahub/internal/platform/logctx"
 	internalworker "github.com/anhtuanlc/mediahub/internal/worker"
 	"github.com/google/uuid"
 	"github.com/hibiken/asynq"
@@ -85,6 +86,7 @@ func (e *ConvertEnqueue) EnqueueConvert(ctx context.Context, jobPublicID, videoP
 		VideoPublicID: videoPublicID.String(),
 		ObjectID:      objectID,
 		Variants:      variants,
+		RequestID:     logctx.RequestIDFrom(ctx),
 	})
 	if err != nil {
 		return err

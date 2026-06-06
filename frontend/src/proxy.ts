@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
+import { isAuditLogsPath } from "@/lib/navigation/navigation";
 
 const API_URL =
   process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8080";
@@ -17,6 +18,29 @@ function isSubsequentNavigationRequest(request: NextRequest): boolean {
   );
 }
 
+async function fetchSessionRole(
+  request: NextRequest,
+): Promise<"owner" | "manager" | "viewer" | null> {
+  const access = request.cookies.get("access_token")?.value;
+  if (!access) return null;
+  try {
+    const res = await fetch(`${API_URL}/api/auth/me`, {
+      headers: { Cookie: `access_token=${access}` },
+      cache: "no-store",
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!res.ok) return null;
+    const data = (await res.json()) as { user?: { role?: string } };
+    const role = data.user?.role?.toLowerCase();
+    if (role === "owner" || role === "manager" || role === "viewer") {
+      return role;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 export async function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
@@ -26,24 +50,21 @@ export async function proxy(request: NextRequest) {
     return NextResponse.redirect(login);
   }
 
+  // Audit logs: luôn chặn non-owner (kể cả RSC prefetch).
+  if (isAuditLogsPath(pathname)) {
+    const role = await fetchSessionRole(request);
+    if (role !== "owner") {
+      return NextResponse.redirect(new URL("/dashboard", request.url));
+    }
+    return NextResponse.next();
+  }
+
   if (isSubsequentNavigationRequest(request)) {
     return NextResponse.next();
   }
 
-  let authenticated = false;
-  try {
-    const access = request.cookies.get("access_token")!.value;
-    const res = await fetch(`${API_URL}/api/auth/me`, {
-      headers: { Cookie: `access_token=${access}` },
-      cache: "no-store",
-      signal: AbortSignal.timeout(8000),
-    });
-    authenticated = res.ok;
-  } catch {
-    authenticated = false;
-  }
-
-  if (!authenticated) {
+  const role = await fetchSessionRole(request);
+  if (!role) {
     const login = new URL("/login", request.url);
     login.searchParams.set("next", pathname);
     return NextResponse.redirect(login);

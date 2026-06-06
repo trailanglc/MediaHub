@@ -15,6 +15,7 @@ type RouterDeps struct {
 	SystemInfo  *SystemInfoHandler
 	System      *SystemHandler
 	Queue       *QueueHandler
+	Audit       *AuditHandler
 	Setup       *SetupHandler
 	Auth        *AuthHandler
 	Member      *MemberHandler
@@ -49,7 +50,7 @@ func NewRouter(deps RouterDeps) *gin.Engine {
 	}
 	r.Use(gin.Recovery())
 	r.Use(middleware.RequestID())
-	r.Use(middleware.Logger(deps.Logger))
+	r.Use(middleware.AccessLogger(deps.Logger))
 	r.Use(middleware.CORS(deps.AppURL))
 	r.Use(observability.HTTPMetricsMiddleware())
 
@@ -118,6 +119,10 @@ func NewRouter(deps RouterDeps) *gin.Engine {
 					}
 					system.POST("/cleanup/temp", deps.System.CleanupTemp)
 					system.POST("/cleanup/orphans", deps.System.CleanupOrphans)
+					if deps.Audit != nil {
+						system.GET("/audit-logs", deps.Audit.List)
+						system.GET("/audit-logs/actions", deps.Audit.Actions)
+					}
 				}
 
 				if deps.APIKeys != nil {

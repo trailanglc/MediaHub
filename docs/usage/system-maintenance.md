@@ -6,6 +6,19 @@
 
 API: `GET/PATCH /api/settings`
 
+## Audit logs (Owner)
+
+Dashboard: **`/system/audit-logs`** — xem lịch sử hành động (login, convert, phân quyền, settings, …).
+
+| API | Mô tả |
+|-----|--------|
+| `GET /api/system/audit-logs` | Danh sách — `cursor`, `limit`, `actions` (csv), `action_prefix`, `actor_public_id`, `from`, `to` |
+| `GET /api/system/audit-logs/actions` | Danh sách action distinct cho bộ lọc UI |
+
+Thời gian giữ audit trong DB: **Settings → Maintenance → Giữ audit log (ngày)** (`maintenance.audit_retention_days`).
+
+App logs (zap) ra stdout — cấu hình `LOG_LEVEL` trong [backend-env](../configuration/backend-env.md). Request `/stream/*`, `/assets/*` không log khi thành công (dùng `/metrics`).
+
 ## System cleanup (Owner)
 
 | API | Mô tả |

@@ -6,17 +6,20 @@ import (
 
 	"github.com/anhtuanlc/mediahub/internal/auth"
 	"github.com/anhtuanlc/mediahub/internal/middleware"
+	"github.com/anhtuanlc/mediahub/internal/platform/clientip"
 	"github.com/anhtuanlc/mediahub/internal/service"
 	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
 )
 
 type AuthHandler struct {
 	auth     *service.AuthService
 	password *PasswordTransport
+	log      *zap.Logger
 }
 
-func NewAuthHandler(authSvc *service.AuthService, password *PasswordTransport) *AuthHandler {
-	return &AuthHandler{auth: authSvc, password: password}
+func NewAuthHandler(authSvc *service.AuthService, password *PasswordTransport, log *zap.Logger) *AuthHandler {
+	return &AuthHandler{auth: authSvc, password: password, log: log}
 }
 
 type loginRequest struct {
@@ -37,6 +40,13 @@ func (h *AuthHandler) Login(c *gin.Context) {
 	}
 	user, tokens, err := h.auth.Login(c.Request.Context(), req.Email, plain, c.ClientIP(), c.Request.UserAgent())
 	if err != nil {
+		if h.log != nil && (errors.Is(err, service.ErrInvalidCredentials) || errors.Is(err, service.ErrTooManyAttempts)) {
+			h.log.Warn("auth.login_failed",
+				zap.String("request_id", c.GetString("request_id")),
+				zap.String("client_ip", clientip.FromGin(c)),
+				zap.Bool("rate_limited", errors.Is(err, service.ErrTooManyAttempts)),
+			)
+		}
 		writeAuthError(c, err)
 		return
 	}

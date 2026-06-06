@@ -26,9 +26,10 @@ function SidebarGroupLabel({ children }: { children: React.ReactNode }) {
 
 export function AppSidebar({ className }: { className?: string }) {
   const pathname = usePathname();
-  const { data: user } = useMe();
+  const { data: user, isLoading } = useMe();
   const logoutMutation = useLogout();
-  const groups = filterNavGroups(isOwner(user));
+  const showOwnerNav = !isLoading && isOwner(user);
+  const groups = filterNavGroups(showOwnerNav);
 
   return (
     <aside

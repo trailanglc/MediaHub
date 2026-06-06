@@ -17,6 +17,8 @@ const (
 
 type Config struct {
 	AppEnv        string
+	LogLevel      string
+	LogLevelEnvInvalid bool
 	AppURL        string
 	APIPublicURL  string
 	CDNPublicURL  string
@@ -102,8 +104,10 @@ type StorageConfig struct {
 }
 
 func Load() (*Config, error) {
+	appEnv := getEnv("APP_ENV", "development")
 	cfg := &Config{
-		AppEnv:              getEnv("APP_ENV", "development"),
+		AppEnv:              appEnv,
+		LogLevel:            resolveLogLevel(appEnv),
 		AppURL:              getEnv("APP_URL", "http://localhost:3000"),
 		APIPublicURL:        getEnv("API_PUBLIC_URL", "http://localhost:8080"),
 		CDNPublicURL:        strings.TrimRight(strings.TrimSpace(os.Getenv("CDN_PUBLIC_URL")), "/"),
@@ -188,6 +192,14 @@ func Load() (*Config, error) {
 
 	applyAutoscale(cfg)
 
+	if raw := strings.TrimSpace(os.Getenv("LOG_LEVEL")); raw != "" {
+		switch strings.ToLower(raw) {
+		case "debug", "info", "warn", "error":
+		default:
+			cfg.LogLevelEnvInvalid = true
+		}
+	}
+
 	return cfg, nil
 }
 
@@ -247,6 +259,23 @@ func getEnvInt(key string, fallback int) int {
 		return fallback
 	}
 	return n
+}
+
+func resolveLogLevel(appEnv string) string {
+	raw := strings.TrimSpace(os.Getenv("LOG_LEVEL"))
+	fallback := "info"
+	if appEnv == "development" {
+		fallback = "debug"
+	}
+	if raw == "" {
+		return fallback
+	}
+	switch strings.ToLower(raw) {
+	case "debug", "info", "warn", "error":
+		return strings.ToLower(raw)
+	default:
+		return fallback
+	}
 }
 
 func getEnvDuration(key string, fallback time.Duration) time.Duration {

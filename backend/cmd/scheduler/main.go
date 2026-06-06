@@ -11,6 +11,7 @@ import (
 	"github.com/anhtuanlc/mediahub/internal/platform/startup"
 	"github.com/anhtuanlc/mediahub/internal/runtime"
 	"github.com/joho/godotenv"
+	"go.uber.org/zap"
 )
 
 func main() {
@@ -21,11 +22,15 @@ func main() {
 		log.Fatalf("config: %v", err)
 	}
 
-	logger, err := platform.NewLogger(cfg.AppEnv)
+	logger, err := platform.NewLogger(cfg.AppEnv, cfg.LogLevel)
 	if err != nil {
 		log.Fatalf("logger: %v", err)
 	}
+	logger = logger.Named("scheduler")
 	defer logger.Sync() //nolint:errcheck
+	if cfg.LogLevelEnvInvalid {
+		logger.Warn("invalid LOG_LEVEL env, using fallback", zap.String("level", cfg.LogLevel))
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()

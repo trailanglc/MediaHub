@@ -179,6 +179,71 @@ export function cleanupOrphans(body?: { dry_run?: boolean; max_delete?: number }
   });
 }
 
+// --- Audit logs (owner) ---
+
+export type AuditLogActor = {
+  id?: number;
+  email?: string;
+  public_id?: string;
+};
+
+export type AuditLogEntry = {
+  id: number;
+  action: string;
+  target_type?: string;
+  target_id?: number;
+  ip?: string;
+  user_agent?: string;
+  actor?: AuditLogActor;
+  metadata: Record<string, string>;
+  created_at: string;
+};
+
+export type AuditLogsResponse = {
+  items: AuditLogEntry[];
+  next_cursor?: number;
+};
+
+export const AUDIT_LOGS_QUERY_KEY = ["audit-logs"] as const;
+export const AUDIT_LOG_ACTIONS_KEY = ["audit-log-actions"] as const;
+
+export type AuditLogsFilterParams = {
+  cursor?: number;
+  limit?: number;
+  /** Comma-separated exact actions (sent as repeated filter) */
+  actions?: string[];
+  action_prefix?: string;
+  actor_public_id?: string;
+  actor_id?: number;
+  from?: string;
+  to?: string;
+};
+
+function appendAuditLogSearchParams(search: URLSearchParams, params?: AuditLogsFilterParams) {
+  if (!params) return;
+  if (params.cursor) search.set("cursor", String(params.cursor));
+  if (params.limit) search.set("limit", String(params.limit));
+  if (params.actions?.length) search.set("actions", params.actions.join(","));
+  if (params.action_prefix) search.set("action_prefix", params.action_prefix);
+  if (params.actor_public_id) search.set("actor_public_id", params.actor_public_id);
+  if (params.actor_id) search.set("actor_id", String(params.actor_id));
+  if (params.from) search.set("from", params.from);
+  if (params.to) search.set("to", params.to);
+}
+
+export function fetchAuditLogs(params?: AuditLogsFilterParams) {
+  const search = new URLSearchParams();
+  appendAuditLogSearchParams(search, params);
+  const qs = search.toString();
+  return apiFetch<AuditLogsResponse>(
+    qs ? `/api/system/audit-logs?${qs}` : "/api/system/audit-logs",
+  );
+}
+
+export function fetchAuditLogActions() {
+  return apiFetch<{ actions: string[] }>("/api/system/audit-logs/actions");
+}
+
 export type SetupStatusResponse = {
   setup_required: boolean;
   setup_allowed: boolean;

@@ -18,10 +18,10 @@ export default async function LoginPage() {
   }
 
   return (
-    <LoginRedirect>
-      <Suspense fallback={<AuthCardSkeleton />}>
+    <Suspense fallback={<AuthCardSkeleton />}>
+      <LoginRedirect>
         <LoginForm setupRequired={false} />
-      </Suspense>
-    </LoginRedirect>
+      </LoginRedirect>
+    </Suspense>
   );
 }

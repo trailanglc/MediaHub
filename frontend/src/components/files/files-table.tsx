@@ -40,6 +40,7 @@ export function FilesTable({
   items,
   rootFolderId,
   selectedIds,
+  highlightedId,
   onToggleSelect,
   onSelectAll,
   onClearSelection,
@@ -57,6 +58,7 @@ export function FilesTable({
   items: MediaObject[];
   rootFolderId: string;
   selectedIds: ReadonlySet<string>;
+  highlightedId?: string | null;
   onToggleSelect: (id: string) => void;
   onSelectAll: () => void;
   onClearSelection: () => void;
@@ -120,6 +122,7 @@ export function FilesTable({
           items.map((obj) => {
             const selectableRow = isSelectableObject(obj, rootFolderId);
             const checked = selectedIds.has(obj.public_id);
+            const highlighted = highlightedId === obj.public_id;
             const openItem = () =>
               trashMode || showSearchPath
                 ? onPreview(obj)
@@ -129,7 +132,14 @@ export function FilesTable({
             return (
               <DataTableRow
                 key={obj.public_id}
-                className={checked ? "bg-primary/5" : undefined}
+                data-object-id={obj.public_id}
+                className={
+                  highlighted
+                    ? "bg-primary/10 ring-1 ring-inset ring-primary/40"
+                    : checked
+                      ? "bg-primary/5"
+                      : undefined
+                }
               >
                 <DataTableCell>
                   {selectableRow ? (

@@ -30,9 +30,21 @@ export function safeNextPath(next: string | null | undefined): string {
   }
   try {
     const decoded = decodeURIComponent(next);
-    if (decoded.startsWith("/") && !decoded.startsWith("//")) {
-      return decoded;
+    if (!decoded.startsWith("/") || decoded.startsWith("//")) {
+      return "/dashboard";
     }
+    const pathOnly = decoded.split(/[?#]/)[0] ?? decoded;
+    const blocked = new Set([
+      "/login",
+      "/setup",
+      "/logout",
+      "/register",
+      "/forgot-password",
+    ]);
+    if (blocked.has(pathOnly) || pathOnly.startsWith("/login/")) {
+      return "/dashboard";
+    }
+    return decoded;
   } catch {
     /* ignore malformed ?next= */
   }

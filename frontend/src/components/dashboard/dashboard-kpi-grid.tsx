@@ -99,23 +99,30 @@ export function DashboardKpiGrid({
 
   return (
     <section aria-label="Tóm tắt nhanh">
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
+      <div className="grid grid-cols-2 gap-2 sm:gap-4 lg:grid-cols-3 xl:grid-cols-6">
         {KPI_ITEMS.map(({ key, title, href, linkLabel, icon: Icon }) => (
-          <Card key={key} size="sm">
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">{title}</CardTitle>
-              <Icon className="size-4 text-muted-foreground" aria-hidden />
+          <Card key={key} size="sm" className="gap-2 py-2.5 sm:gap-3 sm:py-3">
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 px-3 pb-0 sm:px-3">
+              <CardTitle className="text-xs font-medium sm:text-sm">
+                {title}
+              </CardTitle>
+              <Icon
+                className="size-3.5 text-muted-foreground sm:size-4"
+                aria-hidden
+              />
             </CardHeader>
-            <CardContent className="pt-0">
+            <CardContent className="px-3 pt-0">
               {loading ? (
-                <Skeleton className="h-8 w-20" />
+                <Skeleton className="h-6 w-14 sm:h-8 sm:w-20" />
               ) : (
-                <p className="text-2xl font-bold tabular-nums">{values[key]}</p>
+                <p className="text-xl font-bold tabular-nums sm:text-2xl">
+                  {values[key]}
+                </p>
               )}
-              <CardDescription className="mt-1.5">
+              <CardDescription className="mt-1">
                 <Link
                   href={href}
-                  className="font-medium text-foreground underline-offset-4 hover:underline"
+                  className="line-clamp-1 text-xs font-medium text-foreground underline-offset-4 hover:underline sm:text-sm"
                 >
                   {linkLabel}
                 </Link>

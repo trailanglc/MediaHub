@@ -30,6 +30,7 @@ export function FilesMobileList({
   items,
   rootFolderId,
   selectedIds,
+  highlightedId,
   onToggleSelect,
   onOpenFolder,
   onPreview,
@@ -45,6 +46,7 @@ export function FilesMobileList({
   items: MediaObject[];
   rootFolderId: string;
   selectedIds: ReadonlySet<string>;
+  highlightedId?: string | null;
   onToggleSelect: (id: string) => void;
   onOpenFolder: (id: string) => void;
   onPreview: (obj: MediaObject) => void;
@@ -70,6 +72,7 @@ export function FilesMobileList({
       {items.map((obj) => {
         const selectable = isSelectableObject(obj, rootFolderId);
         const checked = selectedIds.has(obj.public_id);
+        const highlighted = highlightedId === obj.public_id;
         const openItem = () =>
           trashMode || showSearchPath
             ? onPreview(obj)
@@ -80,7 +83,14 @@ export function FilesMobileList({
         return (
           <li
             key={obj.public_id}
-            className={checked ? "bg-primary/5" : undefined}
+            data-object-id={obj.public_id}
+            className={
+              highlighted
+                ? "bg-primary/10 ring-1 ring-inset ring-primary/40"
+                : checked
+                  ? "bg-primary/5"
+                  : undefined
+            }
           >
             <div className="flex min-h-14 items-center gap-2 px-3 py-2.5">
               {selectable ? (

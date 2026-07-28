@@ -18,6 +18,7 @@ tags:
   - name: Media
   - name: Convert
   - name: Delivery
+  - name: System
 components:
   securitySchemes:
     ApiKeyAuth:
@@ -261,6 +262,54 @@ components:
           type: object
           additionalProperties:
             $ref: "#/components/schemas/MediaDeliveryURLs"
+    AuditLogActor:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+        email:
+          type: string
+        public_id:
+          type: string
+          format: uuid
+    AuditLogEntry:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+        action:
+          type: string
+          example: video.convert
+        target_type:
+          type: string
+        target_id:
+          type: integer
+          format: int64
+        ip:
+          type: string
+        user_agent:
+          type: string
+        actor:
+          $ref: "#/components/schemas/AuditLogActor"
+        metadata:
+          type: object
+          additionalProperties:
+            type: string
+        created_at:
+          type: string
+          format: date-time
+    AuditLogsResponse:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/AuditLogEntry"
+        next_cursor:
+          type: integer
+          format: int64
   responses:
     BadRequest:
       description: Validation error
@@ -669,3 +718,221 @@ paths:
       responses:
         "200":
           description: oEmbed 1.0 JSON
+  /api/system/audit-logs:
+    get:
+      tags: [Management]
+      summary: List audit logs (Owner)
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: cursor
+          in: query
+          schema:
+            type: integer
+            format: int64
+            default: 0
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+            maximum: 100
+        - name: actions
+          in: query
+          description: Comma-separated exact action values
+          schema:
+            type: string
+            example: auth.login,video.convert
+        - name: action_prefix
+          in: query
+          description: Filter actions by prefix (e.g. auth.)
+          schema:
+            type: string
+        - name: actor_public_id
+          in: query
+          schema:
+            type: string
+            format: uuid
+        - name: actor_id
+          in: query
+          schema:
+            type: integer
+            format: int64
+        - name: action
+          in: query
+          deprecated: true
+          description: Use actions instead
+          schema:
+            type: string
+        - name: from
+          in: query
+          description: RFC3339 or YYYY-MM-DD (start of day)
+          schema:
+            type: string
+            format: date-time
+        - name: to
+          in: query
+          description: RFC3339 or YYYY-MM-DD (end of day)
+          schema:
+            type: string
+            format: date-time
+      responses:
+        "200":
+          description: Paginated audit entries (newest first)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuditLogsResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /api/system/audit-logs/actions:
+    get:
+      tags: [Management]
+      summary: Distinct audit action values (Owner)
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: Action strings for filter UI
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  actions:
+                    type: array
+                    items:
+                      type: string
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /api/system/overview:
+    get:
+      tags: [System]
+      summary: Owner dashboard overview (aggregated metrics)
+      description: |
+        Single response for the Owner dashboard: host resources, component health,
+        content counts, queue snapshot (max 5 running/failed jobs), storage quota,
+        stream analytics, and upload counters. May include `partial: true` with
+        per-section `errors` when a non-critical subsection fails.
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: Aggregated dashboard metrics
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "503":
+          description: Health subsystem unavailable
+  /api/system/storage:
+    get:
+      tags: [System]
+      summary: Object storage usage (Owner)
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: Storage stats and workspace quota
+  /api/system/queue:
+    get:
+      tags: [System]
+      summary: Convert queue status (Owner)
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: Queue depth, jobs, paused flag
+  /api/system/queue/pause:
+    post:
+      tags: [System]
+      summary: Pause convert queue (Owner)
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: Queue paused
+  /api/system/queue/resume:
+    post:
+      tags: [System]
+      summary: Resume convert queue (Owner)
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: Queue resumed
+  /api/system/cleanup/temp:
+    post:
+      tags: [System]
+      summary: Cleanup temp upload objects (Owner)
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: Cleanup result
+  /api/system/cleanup/orphans:
+    post:
+      tags: [System]
+      summary: Scan or delete orphan storage keys (Owner)
+      security:
+        - BearerAuth: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                dry_run:
+                  type: boolean
+                max_delete:
+                  type: integer
+      responses:
+        "200":
+          description: Orphan scan/delete result
+  /api/system/stream-analytics:
+    get:
+      tags: [System]
+      summary: Stream analytics counters (Owner)
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: Redis stream metrics
+  /api/videos/{public_id}/convert/cancel:
+    post:
+      tags: [Convert]
+      summary: Cancel active convert job
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: public_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Job cancelled
+  /api/v1/media/{public_id}/convert/cancel:
+    post:
+      tags: [Convert]
+      summary: Cancel active convert job (Integration API)
+      security:
+        - ApiKeyAuth: []
+      parameters:
+        - name: public_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Job cancelled

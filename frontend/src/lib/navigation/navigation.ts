@@ -16,6 +16,7 @@ export const NAV_GROUPS: NavGroup[] = [
       { href: "/dashboard", label: "Dashboard", ownerOnly: false },
       { href: "/files", label: "Files", ownerOnly: false },
       { href: "/videos", label: "Videos", ownerOnly: false },
+      { href: "/download", label: "Download", ownerOnly: false },
     ],
   },
   {
@@ -42,6 +43,7 @@ export const BREADCRUMB_LABELS: Record<string, string> = {
   dashboard: "Dashboard",
   files: "Files",
   videos: "Videos",
+  download: "Download",
   members: "Members",
   permissions: "Permissions",
   "api-keys": "API Keys",

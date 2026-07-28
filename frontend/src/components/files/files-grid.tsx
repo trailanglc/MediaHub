@@ -50,6 +50,7 @@ export function FilesGrid({
   items,
   rootFolderId,
   selectedIds,
+  highlightedId,
   onToggleSelect,
   previewUrls,
   onOpenFolder,
@@ -66,6 +67,7 @@ export function FilesGrid({
   items: MediaObject[];
   rootFolderId: string;
   selectedIds: ReadonlySet<string>;
+  highlightedId?: string | null;
   onToggleSelect: (id: string) => void;
   previewUrls?: Record<string, ObjectAccessURLs>;
   onOpenFolder: (id: string) => void;
@@ -92,6 +94,7 @@ export function FilesGrid({
       {items.map((obj) => {
         const selectable = isSelectableObject(obj, rootFolderId);
         const checked = selectedIds.has(obj.public_id);
+        const highlighted = highlightedId === obj.public_id;
         const openItem = () =>
           trashMode || showSearchPath
             ? onPreview(obj)
@@ -101,7 +104,14 @@ export function FilesGrid({
         return (
           <Card
             key={obj.public_id}
-            className={`overflow-hidden ${checked ? "ring-2 ring-primary/50" : ""}`}
+            data-object-id={obj.public_id}
+            className={`overflow-hidden ${
+              highlighted
+                ? "ring-2 ring-primary"
+                : checked
+                  ? "ring-2 ring-primary/50"
+                  : ""
+            }`}
           >
             <button
               type="button"

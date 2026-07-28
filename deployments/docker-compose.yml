@@ -7,8 +7,9 @@ services:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB}
+    # Host 15432 — tránh chiếm Postgres mặc định 5432 (dành riêng MediaHub).
     ports:
-      - "5432:5432"
+      - "15432:5432"
     volumes:
       - mediahub_postgres:/var/lib/postgresql/data
     healthcheck:
@@ -63,8 +64,9 @@ services:
       --maxmemory 512mb
       --maxmemory-policy allkeys-lru
       --save ""
+    # Host 16379 — tránh chiếm Redis mặc định 6379 (dành riêng MediaHub).
     ports:
-      - "6379:6379"
+      - "16379:6379"
     volumes:
       - mediahub_redis:/data
     healthcheck:

@@ -77,7 +77,7 @@ func WrapPostgres(err error, dsn string) error {
 	if err == nil {
 		return nil
 	}
-	_, port := hostPort("", "localhost", "5432")
+	_, port := hostPort("", "localhost", "15432")
 	if strings.Contains(dsn, ":") {
 		// best-effort parse postgres://user:pass@host:port/db
 		if i := strings.LastIndex(dsn, "@"); i >= 0 {
@@ -116,7 +116,7 @@ func WrapRedis(err error, addr string) error {
 	if err == nil {
 		return nil
 	}
-	host, port := hostPort(addr, "localhost", "6379")
+	host, port := hostPort(addr, "localhost", "16379")
 	detail := err.Error()
 	if isConnRefused(err) {
 		detail = fmt.Sprintf("không kết nối được Redis (%s:%s — connection refused)", host, port)

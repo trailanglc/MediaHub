@@ -3,7 +3,9 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/anhtuanlc/mediahub/internal/platform/logctx"
 	internalworker "github.com/anhtuanlc/mediahub/internal/worker"
@@ -59,11 +61,31 @@ func (e *ConvertEnqueue) MaxDepth() int {
 	return e.maxDepth
 }
 
+// IsAsynqQueueMissing treats an empty/missing convert queue as idle (not an API error).
+// GetQueueInfo returns an unwrapped NOT_FOUND; Pause/List wrap asynq.ErrQueueNotFound.
+func IsAsynqQueueMissing(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, asynq.ErrQueueNotFound) {
+		return true
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "does not exist") || strings.HasPrefix(msg, "NOT_FOUND:")
+}
+
 func (e *ConvertEnqueue) queueInfo() (*asynq.QueueInfo, error) {
 	if e == nil || e.inspector == nil {
 		return nil, nil
 	}
-	return e.inspector.GetQueueInfo(asynqDefaultQueue)
+	info, err := e.inspector.GetQueueInfo(asynqDefaultQueue)
+	if err != nil {
+		if IsAsynqQueueMissing(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return info, nil
 }
 
 // PendingDepth counts tasks waiting or running in the default Asynq queue.
@@ -97,7 +119,11 @@ func (e *ConvertEnqueue) PauseQueue(ctx context.Context) error {
 		return fmt.Errorf("convert enqueue not configured")
 	}
 	_ = ctx
-	return e.inspector.PauseQueue(asynqDefaultQueue)
+	err := e.inspector.PauseQueue(asynqDefaultQueue)
+	if IsAsynqQueueMissing(err) {
+		return nil
+	}
+	return err
 }
 
 func (e *ConvertEnqueue) ResumeQueue(ctx context.Context) error {
@@ -105,7 +131,11 @@ func (e *ConvertEnqueue) ResumeQueue(ctx context.Context) error {
 		return fmt.Errorf("convert enqueue not configured")
 	}
 	_ = ctx
-	return e.inspector.UnpauseQueue(asynqDefaultQueue)
+	err := e.inspector.UnpauseQueue(asynqDefaultQueue)
+	if IsAsynqQueueMissing(err) {
+		return nil
+	}
+	return err
 }
 
 func (e *ConvertEnqueue) EnqueueConvert(ctx context.Context, jobPublicID, videoPublicID uuid.UUID, objectID int64, variants []string, maxAttempts int) error {
@@ -165,6 +195,9 @@ func (e *ConvertEnqueue) DeletePendingTaskByJobID(ctx context.Context, jobPublic
 	for _, listFn := range listFns {
 		tasks, err := listFn(asynqDefaultQueue)
 		if err != nil {
+			if IsAsynqQueueMissing(err) {
+				return nil
+			}
 			return err
 		}
 		for _, t := range tasks {

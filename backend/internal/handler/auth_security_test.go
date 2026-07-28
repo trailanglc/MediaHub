@@ -237,17 +237,17 @@ func TestSecurity_LoginRateLimit(t *testing.T) {
 	}
 }
 
-func TestSecurity_CORSDoesNotReflectEvilOrigin(t *testing.T) {
+func TestSecurity_CORSReflectsOriginInDevelopment(t *testing.T) {
 	env := newSecurityEnv(t)
 	req := httptest.NewRequest(http.MethodOptions, "/api/auth/login", nil)
-	req.Header.Set("Origin", "https://evil.example")
+	req.Header.Set("Origin", "http://192.168.8.100:3000")
 	req.Header.Set("Access-Control-Request-Method", "POST")
 	rec := env.do(req)
-	if rec.Header().Get("Access-Control-Allow-Origin") == "https://evil.example" {
-		t.Fatal("CORS must not reflect arbitrary origin")
-	}
-	if rec.Header().Get("Access-Control-Allow-Origin") != "http://localhost:3000" {
+	if rec.Header().Get("Access-Control-Allow-Origin") != "http://192.168.8.100:3000" {
 		t.Fatalf("CORS allow-origin = %q", rec.Header().Get("Access-Control-Allow-Origin"))
+	}
+	if rec.Header().Get("Access-Control-Allow-Credentials") != "true" {
+		t.Fatal("expected credentials CORS")
 	}
 }
 

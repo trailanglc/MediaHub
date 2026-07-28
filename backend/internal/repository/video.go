@@ -31,21 +31,34 @@ type VideoAsset struct {
 	HLSStoragePrefix *string
 	ThumbnailKey     *string
 	LastError        *string
+	CategoryID       *int64
 	CreatedAt        time.Time
 	UpdatedAt        time.Time
 }
 
 // VideoRow joins media_objects with video_assets for API listing.
 type VideoRow struct {
-	Media MediaObject
-	Asset VideoAsset
+	Media            MediaObject
+	Asset            VideoAsset
+	CategoryPublicID *uuid.UUID
+	CategoryName     *string
 }
+
+// CategoryFilter values for VideoListFilter.CategoryFilter.
+const (
+	CategoryFilterAll           = "all"
+	CategoryFilterUncategorized = "uncategorized"
+)
 
 type VideoListFilter struct {
 	HLSStatus []string
 	Query     string
 	Cursor    int64
 	Limit     int
+	// CategoryFilter: "all" | "uncategorized" | empty (treated as uncategorized).
+	// When CategoryID is set, lists videos in that category instead.
+	CategoryFilter string
+	CategoryID     *int64
 }
 
 type ConvertJob struct {
@@ -91,7 +104,7 @@ func scanVideoAsset(row pgx.Row) (*VideoAsset, error) {
 	err := row.Scan(
 		&v.ID, &v.ObjectID, &v.DurationSeconds, &v.Width, &v.Height, &v.Codec, &v.Bitrate,
 		&v.HLSStatus, &v.HLSMasterKey, &v.HLSStoragePrefix, &v.ThumbnailKey, &v.LastError,
-		&v.CreatedAt, &v.UpdatedAt,
+		&v.CategoryID, &v.CreatedAt, &v.UpdatedAt,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -102,38 +115,19 @@ func scanVideoAsset(row pgx.Row) (*VideoAsset, error) {
 	return &v, nil
 }
 
-func (r *VideoRepository) GetByObjectID(ctx context.Context, objectID int64) (*VideoAsset, error) {
-	row := r.pool.QueryRow(ctx, `
-		SELECT id, object_id, duration_seconds, width, height, codec, bitrate,
-		       hls_status, hls_master_key, hls_storage_prefix, thumbnail_key, last_error,
-		       created_at, updated_at
-		FROM video_assets WHERE object_id = $1
-	`, objectID)
-	return scanVideoAsset(row)
-}
-
-func (r *VideoRepository) GetByObjectPublicID(ctx context.Context, publicID uuid.UUID) (*VideoRow, error) {
-	row := r.pool.QueryRow(ctx, `
-		SELECT m.id, m.public_id, m.parent_id, p.public_id, m.type, m.name, m.original_name,
-		       m.mime_type, m.size_bytes, m.storage_key, m.checksum, m.thumbnail_key, m.status,
-		       m.created_by, m.updated_by, m.deleted_at, m.created_at, m.updated_at,
-		       v.id, v.object_id, v.duration_seconds, v.width, v.height, v.codec, v.bitrate,
-		       v.hls_status, v.hls_master_key, v.hls_storage_prefix, v.thumbnail_key, v.last_error,
-		       v.created_at, v.updated_at
-		FROM media_objects m
-		LEFT JOIN media_objects p ON p.id = m.parent_id
-		JOIN video_assets v ON v.object_id = m.id
-		WHERE m.public_id = $1 AND m.deleted_at IS NULL AND m.type = 'video'
-	`, publicID)
+func scanVideoRow(row pgx.Row) (*VideoRow, error) {
 	var m MediaObject
 	var v VideoAsset
+	var catPublic *uuid.UUID
+	var catName *string
 	err := row.Scan(
 		&m.ID, &m.PublicID, &m.ParentID, &m.ParentPublic, &m.Type, &m.Name, &m.OriginalName,
 		&m.MimeType, &m.SizeBytes, &m.StorageKey, &m.Checksum, &m.ThumbnailKey, &m.Status,
 		&m.CreatedBy, &m.UpdatedBy, &m.DeletedAt, &m.CreatedAt, &m.UpdatedAt,
 		&v.ID, &v.ObjectID, &v.DurationSeconds, &v.Width, &v.Height, &v.Codec, &v.Bitrate,
 		&v.HLSStatus, &v.HLSMasterKey, &v.HLSStoragePrefix, &v.ThumbnailKey, &v.LastError,
-		&v.CreatedAt, &v.UpdatedAt,
+		&v.CategoryID, &v.CreatedAt, &v.UpdatedAt,
+		&catPublic, &catName,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -142,7 +136,37 @@ func (r *VideoRepository) GetByObjectPublicID(ctx context.Context, publicID uuid
 		return nil, err
 	}
 	v.ObjectID = m.ID
-	return &VideoRow{Media: m, Asset: v}, nil
+	return &VideoRow{Media: m, Asset: v, CategoryPublicID: catPublic, CategoryName: catName}, nil
+}
+
+const videoRowSelect = `
+		SELECT m.id, m.public_id, m.parent_id, p.public_id, m.type, m.name, m.original_name,
+		       m.mime_type, m.size_bytes, m.storage_key, m.checksum, m.thumbnail_key, m.status,
+		       m.created_by, m.updated_by, m.deleted_at, m.created_at, m.updated_at,
+		       v.id, v.object_id, v.duration_seconds, v.width, v.height, v.codec, v.bitrate,
+		       v.hls_status, v.hls_master_key, v.hls_storage_prefix, v.thumbnail_key, v.last_error,
+		       v.category_id, v.created_at, v.updated_at,
+		       c.public_id, c.name
+		FROM media_objects m
+		LEFT JOIN media_objects p ON p.id = m.parent_id
+		JOIN video_assets v ON v.object_id = m.id
+		LEFT JOIN video_categories c ON c.id = v.category_id`
+
+func (r *VideoRepository) GetByObjectID(ctx context.Context, objectID int64) (*VideoAsset, error) {
+	row := r.pool.QueryRow(ctx, `
+		SELECT id, object_id, duration_seconds, width, height, codec, bitrate,
+		       hls_status, hls_master_key, hls_storage_prefix, thumbnail_key, last_error,
+		       category_id, created_at, updated_at
+		FROM video_assets WHERE object_id = $1
+	`, objectID)
+	return scanVideoAsset(row)
+}
+
+func (r *VideoRepository) GetByObjectPublicID(ctx context.Context, publicID uuid.UUID) (*VideoRow, error) {
+	row := r.pool.QueryRow(ctx, videoRowSelect+`
+		WHERE m.public_id = $1 AND m.deleted_at IS NULL AND m.type = 'video'
+	`, publicID)
+	return scanVideoRow(row)
 }
 
 func (r *VideoRepository) ListVideos(ctx context.Context, f VideoListFilter) ([]VideoRow, error) {
@@ -168,21 +192,24 @@ func (r *VideoRepository) ListVideos(ctx context.Context, f VideoListFilter) ([]
 		args = append(args, q)
 		argN++
 	}
+	if f.CategoryID != nil {
+		where += fmt.Sprintf(` AND v.category_id = $%d`, argN)
+		args = append(args, *f.CategoryID)
+		argN++
+	} else {
+		switch f.CategoryFilter {
+		case CategoryFilterAll:
+			// no category constraint
+		case CategoryFilterUncategorized, "":
+			where += ` AND v.category_id IS NULL`
+		}
+	}
 	args = append(args, limit+1)
-	q := fmt.Sprintf(`
-		SELECT m.id, m.public_id, m.parent_id, p.public_id, m.type, m.name, m.original_name,
-		       m.mime_type, m.size_bytes, m.storage_key, m.checksum, m.thumbnail_key, m.status,
-		       m.created_by, m.updated_by, m.deleted_at, m.created_at, m.updated_at,
-		       v.id, v.object_id, v.duration_seconds, v.width, v.height, v.codec, v.bitrate,
-		       v.hls_status, v.hls_master_key, v.hls_storage_prefix, v.thumbnail_key, v.last_error,
-		       v.created_at, v.updated_at
-		FROM media_objects m
-		LEFT JOIN media_objects p ON p.id = m.parent_id
-		JOIN video_assets v ON v.object_id = m.id
+	q := fmt.Sprintf(`%s
 		WHERE %s
 		ORDER BY m.id DESC
 		LIMIT $%d
-	`, where, argN)
+	`, videoRowSelect, where, argN)
 	rows, err := r.pool.Query(ctx, q, args...)
 	if err != nil {
 		return nil, err
@@ -190,25 +217,26 @@ func (r *VideoRepository) ListVideos(ctx context.Context, f VideoListFilter) ([]
 	defer rows.Close()
 	var list []VideoRow
 	for rows.Next() {
-		var row VideoRow
-		var m MediaObject
-		var v VideoAsset
-		if err := rows.Scan(
-			&m.ID, &m.PublicID, &m.ParentID, &m.ParentPublic, &m.Type, &m.Name, &m.OriginalName,
-			&m.MimeType, &m.SizeBytes, &m.StorageKey, &m.Checksum, &m.ThumbnailKey, &m.Status,
-			&m.CreatedBy, &m.UpdatedBy, &m.DeletedAt, &m.CreatedAt, &m.UpdatedAt,
-			&v.ID, &v.ObjectID, &v.DurationSeconds, &v.Width, &v.Height, &v.Codec, &v.Bitrate,
-			&v.HLSStatus, &v.HLSMasterKey, &v.HLSStoragePrefix, &v.ThumbnailKey, &v.LastError,
-			&v.CreatedAt, &v.UpdatedAt,
-		); err != nil {
+		row, err := scanVideoRow(rows)
+		if err != nil {
 			return nil, err
 		}
-		v.ObjectID = m.ID
-		row.Media = m
-		row.Asset = v
-		list = append(list, row)
+		list = append(list, *row)
 	}
 	return list, rows.Err()
+}
+
+func (r *VideoRepository) SetVideoCategory(ctx context.Context, assetID int64, categoryID *int64) error {
+	tag, err := r.pool.Exec(ctx, `
+		UPDATE video_assets SET category_id = $2, updated_at = now() WHERE id = $1
+	`, assetID, categoryID)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrVideoAssetNotFound
+	}
+	return nil
 }
 
 func trimQuery(q string) string {
@@ -689,34 +717,8 @@ func (r *VideoRepository) UpdateStreamPolicy(ctx context.Context, videoAssetID i
 }
 
 func (r *VideoRepository) GetVideoRowByAssetID(ctx context.Context, assetID int64) (*VideoRow, error) {
-	row := r.pool.QueryRow(ctx, `
-		SELECT m.id, m.public_id, m.parent_id, p.public_id, m.type, m.name, m.original_name,
-		       m.mime_type, m.size_bytes, m.storage_key, m.checksum, m.thumbnail_key, m.status,
-		       m.created_by, m.updated_by, m.deleted_at, m.created_at, m.updated_at,
-		       v.id, v.object_id, v.duration_seconds, v.width, v.height, v.codec, v.bitrate,
-		       v.hls_status, v.hls_master_key, v.hls_storage_prefix, v.thumbnail_key, v.last_error,
-		       v.created_at, v.updated_at
-		FROM media_objects m
-		LEFT JOIN media_objects p ON p.id = m.parent_id
-		JOIN video_assets v ON v.object_id = m.id
+	row := r.pool.QueryRow(ctx, videoRowSelect+`
 		WHERE v.id = $1 AND m.deleted_at IS NULL
 	`, assetID)
-	var m MediaObject
-	var v VideoAsset
-	err := row.Scan(
-		&m.ID, &m.PublicID, &m.ParentID, &m.ParentPublic, &m.Type, &m.Name, &m.OriginalName,
-		&m.MimeType, &m.SizeBytes, &m.StorageKey, &m.Checksum, &m.ThumbnailKey, &m.Status,
-		&m.CreatedBy, &m.UpdatedBy, &m.DeletedAt, &m.CreatedAt, &m.UpdatedAt,
-		&v.ID, &v.ObjectID, &v.DurationSeconds, &v.Width, &v.Height, &v.Codec, &v.Bitrate,
-		&v.HLSStatus, &v.HLSMasterKey, &v.HLSStoragePrefix, &v.ThumbnailKey, &v.LastError,
-		&v.CreatedAt, &v.UpdatedAt,
-	)
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, ErrVideoAssetNotFound
-		}
-		return nil, err
-	}
-	v.ObjectID = m.ID
-	return &VideoRow{Media: m, Asset: v}, nil
+	return scanVideoRow(row)
 }

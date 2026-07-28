@@ -126,17 +126,18 @@ function ScopeCheckboxes({
   };
 
   return (
-    <div className="space-y-2">
+    <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
       {INTEGRATION_API_KEY_SCOPES.map((scope) => (
         <label
           key={scope}
-          className="flex cursor-pointer items-start gap-2 text-sm"
+          className="flex cursor-pointer items-start gap-2 rounded-md border bg-muted/20 p-2.5 text-sm"
         >
           <Checkbox
             checked={scopes.includes(scope)}
             onChange={(e) => toggle(scope, e.target.checked)}
+            className="mt-0.5"
           />
-          <span>
+          <span className="min-w-0">
             <span className="font-medium">{scope}</span>
             <span className="block text-xs text-muted-foreground">
               {API_KEY_SCOPE_LABELS[scope]}

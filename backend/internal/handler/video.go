@@ -38,12 +38,27 @@ func (h *VideoHandler) List(c *gin.Context) {
 	}
 	cursor, _ := strconv.ParseInt(c.DefaultQuery("cursor", "0"), 10, 64)
 	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "50"))
-	items, next, err := h.videos.List(c.Request.Context(), u.ID, u.Role, service.ListVideosInput{
+	in := service.ListVideosInput{
 		HLSStatus: statuses,
 		Query:     c.Query("q"),
 		Cursor:    cursor,
 		Limit:     limit,
-	})
+	}
+	catRaw := strings.TrimSpace(c.Query("category"))
+	switch {
+	case catRaw == "" || catRaw == "uncategorized":
+		in.CategoryFilter = "uncategorized"
+	case catRaw == "all":
+		in.CategoryFilter = "all"
+	default:
+		pid, err := uuid.Parse(catRaw)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "validation_error", "message": "invalid category"})
+			return
+		}
+		in.CategoryID = &pid
+	}
+	items, next, err := h.videos.List(c.Request.Context(), u.ID, u.Role, in)
 	if err != nil {
 		writeVideoError(c, err)
 		return
@@ -220,12 +235,50 @@ func (h *VideoHandler) PatchStreamPolicy(c *gin.Context) {
 	c.JSON(http.StatusOK, pol)
 }
 
+type videoCategoryPatch struct {
+	CategoryPublicID *string `json:"category_public_id"`
+}
+
+func (h *VideoHandler) PatchCategory(c *gin.Context) {
+	u, ok := middleware.GetAuthUser(c)
+	if !ok {
+		return
+	}
+	pid, err := uuid.Parse(c.Param("public_id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "validation_error", "message": "invalid public_id"})
+		return
+	}
+	var req videoCategoryPatch
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "validation_error", "message": "invalid body"})
+		return
+	}
+	in := service.SetVideoCategoryInput{}
+	if req.CategoryPublicID != nil && strings.TrimSpace(*req.CategoryPublicID) != "" {
+		cid, err := uuid.Parse(strings.TrimSpace(*req.CategoryPublicID))
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "validation_error", "message": "invalid category_public_id"})
+			return
+		}
+		in.CategoryPublicID = &cid
+	}
+	dto, err := h.videos.SetCategory(c.Request.Context(), u.ID, u.Role, pid, in)
+	if err != nil {
+		writeVideoError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, dto)
+}
+
 func writeVideoError(c *gin.Context, err error) {
 	switch {
 	case errors.Is(err, service.ErrVideoAccessDenied):
 		c.JSON(http.StatusForbidden, gin.H{"error": "forbidden", "message": "insufficient permissions"})
 	case errors.Is(err, service.ErrVideoNotFound):
 		c.JSON(http.StatusNotFound, gin.H{"error": "not_found", "message": "video not found"})
+	case errors.Is(err, service.ErrVideoCategoryNotFound):
+		c.JSON(http.StatusNotFound, gin.H{"error": "not_found", "message": "category not found"})
 	case errors.Is(err, service.ErrVideoInvalidState):
 		c.JSON(http.StatusConflict, gin.H{"error": "conflict", "message": err.Error()})
 	case errors.Is(err, service.ErrVideoConvertActive):

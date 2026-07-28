@@ -406,7 +406,7 @@ func (s *MediaObjectService) CreateFolder(ctx context.Context, userID int64, rol
 		return nil, err
 	}
 	tid := m.ID
-	_ = s.audit.Log(ctx, &userID, "folder.create", "folder", &tid, ip, ua, map[string]string{"name": name})
+	_ = s.audit.Log(ctx, &userID, "folder.create", "folder", &tid, ip, ua, map[string]string{"name": m.Name})
 	caps := s.capabilities(ctx, userID, role, m.ID)
 	dto := toDTO(m, caps)
 	return &dto, nil
@@ -437,6 +437,14 @@ func (s *MediaObjectService) Patch(ctx context.Context, userID int64, role strin
 		name := strings.TrimSpace(*in.Name)
 		if name == "" || len(name) > 255 {
 			return nil, ErrMediaInvalidName
+		}
+		if m.ParentID != nil {
+			exclude := m.ID
+			resolved, err := s.objects.ResolveUniqueName(ctx, *m.ParentID, name, &exclude)
+			if err != nil {
+				return nil, err
+			}
+			name = resolved
 		}
 		if err := s.objects.UpdateName(ctx, m.ID, userID, name); err != nil {
 			return nil, err
@@ -501,6 +509,7 @@ func (s *MediaObjectService) BulkRename(ctx context.Context, userID int64, role 
 		newName string
 	}
 	plannedRenames := make([]planned, 0, len(in.ObjectPublicIDs))
+	takenByParent := make(map[int64]map[string]struct{})
 
 	for _, pid := range in.ObjectPublicIDs {
 		m, err := s.objects.GetByPublicID(ctx, pid)
@@ -523,6 +532,36 @@ func (s *MediaObjectService) BulkRename(ctx context.Context, userID int64, role 
 			return nil, ErrMediaInvalidName
 		}
 		plannedRenames = append(plannedRenames, planned{obj: m, newName: newName})
+	}
+
+	for _, p := range plannedRenames {
+		if p.obj.ParentID == nil {
+			continue
+		}
+		parentID := *p.obj.ParentID
+		if _, ok := takenByParent[parentID]; ok {
+			continue
+		}
+		taken, err := s.objects.ListActiveSiblingNames(ctx, parentID, nil)
+		if err != nil {
+			return nil, err
+		}
+		takenByParent[parentID] = taken
+	}
+	for _, p := range plannedRenames {
+		if p.obj.ParentID == nil {
+			continue
+		}
+		delete(takenByParent[*p.obj.ParentID], p.obj.Name)
+	}
+	for i, p := range plannedRenames {
+		if p.obj.ParentID == nil {
+			continue
+		}
+		taken := takenByParent[*p.obj.ParentID]
+		unique := mediautil.UniqueSiblingName(p.newName, taken)
+		plannedRenames[i].newName = unique
+		taken[unique] = struct{}{}
 	}
 
 	tx, err := s.objects.Begin(ctx)
@@ -785,6 +824,16 @@ func (s *MediaObjectService) Restore(ctx context.Context, userID int64, role str
 		}
 		if parent.DeletedAt != nil {
 			return nil, ErrMediaParentDeleted
+		}
+		exclude := m.ID
+		unique, err := s.objects.ResolveUniqueName(ctx, *m.ParentID, m.Name, &exclude)
+		if err != nil {
+			return nil, err
+		}
+		if unique != m.Name {
+			if err := s.objects.UpdateNameAny(ctx, m.ID, userID, unique); err != nil {
+				return nil, err
+			}
 		}
 	}
 	restoredCount, err := s.objects.RestoreSubtree(ctx, m.ID, userID)

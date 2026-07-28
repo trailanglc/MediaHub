@@ -45,11 +45,21 @@ type Config struct {
 	SetupToken          string
 	FFmpegPath          string
 	FFprobePath         string
+	FFmpegHwAccel       string // auto | vaapi | none
+	FFmpegVAAPIDevice   string
 	StreamSigningSecret string
 	ConvertMaxConcurrent  int
 	ConvertMinConcurrent  int
 	ConvertQueueMaxDepth int
 	ConvertJobTimeout    time.Duration
+
+	YTDLPPath                 string
+	DownloadMaxConcurrent     int
+	DownloadChunkConcurrency  int
+	DownloadMaxBytes          int64
+	DownloadJobTimeout        time.Duration
+	DownloadAnalyzeTimeout    time.Duration
+	DownloadQueueMaxDepth     int
 	StreamRateLimitPerMin int
 	// StreamSegmentRateLimitPerMin caps origin segment fetches per IP/video per minute
 	// (fails open: never blocks playback on Redis errors). 0 derives 10x the playlist limit.
@@ -113,7 +123,7 @@ func Load() (*Config, error) {
 		CDNPublicURL:        strings.TrimRight(strings.TrimSpace(os.Getenv("CDN_PUBLIC_URL")), "/"),
 		APIAddr:             getEnv("API_ADDR", ":8080"),
 		DBDSN:               os.Getenv("DB_DSN"),
-		RedisAddr:           getEnv("REDIS_ADDR", "localhost:6379"),
+		RedisAddr:           getEnv("REDIS_ADDR", "localhost:16379"),
 		DBMaxConns:           getEnvInt("DB_MAX_CONNS", 0),
 		DBMinConns:           getEnvInt("DB_MIN_CONNS", 0),
 		RedisPoolSize:        getEnvInt("REDIS_POOL_SIZE", 0),
@@ -129,12 +139,21 @@ func Load() (*Config, error) {
 		RequireEncryptedPassword: getEnvBool("REQUIRE_ENCRYPTED_PASSWORD", false),
 		SetupToken:          os.Getenv("SETUP_TOKEN"),
 		FFmpegPath:          getEnv("FFMPEG_PATH", "/usr/bin/ffmpeg"),
-		FFprobePath:           getEnv("FFPROBE_PATH", "/usr/bin/ffprobe"),
+		FFprobePath:         getEnv("FFPROBE_PATH", "/usr/bin/ffprobe"),
+		FFmpegHwAccel:       getEnv("FFMPEG_HWACCEL", "auto"),
+		FFmpegVAAPIDevice:   getEnv("FFMPEG_VAAPI_DEVICE", "/dev/dri/renderD128"),
 		StreamSigningSecret:   os.Getenv("STREAM_SIGNING_SECRET"),
 		ConvertMaxConcurrent:   getEnvInt("CONVERT_MAX_CONCURRENT", 0),
 		ConvertMinConcurrent:   getEnvInt("CONVERT_MIN_CONCURRENT", 0),
 		ConvertQueueMaxDepth:   getEnvInt("CONVERT_QUEUE_MAX_DEPTH", 0),
 		ConvertJobTimeout:     getEnvDuration("CONVERT_JOB_TIMEOUT", 2*time.Hour),
+		YTDLPPath:                getEnv("YTDLP_PATH", "yt-dlp"),
+		DownloadMaxConcurrent:    getEnvInt("DOWNLOAD_MAX_CONCURRENT", 2),
+		DownloadChunkConcurrency: getEnvInt("DOWNLOAD_CHUNK_CONCURRENCY", 2),
+		DownloadMaxBytes:         getEnvInt64("DOWNLOAD_MAX_BYTES", 10*1024*1024*1024), // 10 GiB
+		DownloadJobTimeout:       getEnvDuration("DOWNLOAD_JOB_TIMEOUT", 2*time.Hour),
+		DownloadAnalyzeTimeout:   getEnvDuration("DOWNLOAD_ANALYZE_TIMEOUT", 60*time.Second),
+		DownloadQueueMaxDepth:    getEnvInt("DOWNLOAD_QUEUE_MAX_DEPTH", 50),
 		StreamRateLimitPerMin: getEnvInt("STREAM_RATE_LIMIT_PER_MIN", 120),
 		StreamSegmentRateLimitPerMin: getEnvInt("STREAM_SEGMENT_RATE_LIMIT_PER_MIN", 0),
 		StreamSegmentURLTTL:          getEnvDuration("STREAM_SEGMENT_URL_TTL", time.Hour),
@@ -288,4 +307,16 @@ func getEnvDuration(key string, fallback time.Duration) time.Duration {
 		return fallback
 	}
 	return d
+}
+
+func getEnvInt64(key string, fallback int64) int64 {
+	v := os.Getenv(key)
+	if v == "" {
+		return fallback
+	}
+	n, err := strconv.ParseInt(v, 10, 64)
+	if err != nil {
+		return fallback
+	}
+	return n
 }

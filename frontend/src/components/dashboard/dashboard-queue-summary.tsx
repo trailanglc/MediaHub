@@ -29,14 +29,14 @@ export function DashboardQueueSummary({
   loading: boolean;
 }) {
   if (loading) {
-    return <Skeleton className="h-56 rounded-xl" />;
+    return <Skeleton className="h-40 rounded-xl sm:h-56" />;
   }
 
   const queue = data?.queue;
   if (!queue) {
     return (
-      <Card>
-        <CardContent className="py-8 text-sm text-muted-foreground">
+      <Card size="sm">
+        <CardContent className="py-6 text-sm text-muted-foreground sm:py-8">
           Không có dữ liệu queue.
         </CardContent>
       </Card>
@@ -52,44 +52,51 @@ export function DashboardQueueSummary({
       ? Math.min(100, (queue.depth / queue.max_depth) * 100)
       : null;
 
+  const stats = [
+    {
+      value: queue.depth,
+      label: queue.max_depth
+        ? `Độ sâu / ${queue.max_depth}`
+        : "Độ sâu",
+    },
+    { value: pending, label: "Chờ" },
+    { value: active, label: "Đang chạy" },
+    { value: failed, label: "Thất bại" },
+  ];
+
   return (
-    <Card>
-      <CardHeader className="flex flex-row items-start justify-between gap-2">
-        <div>
-          <CardTitle>Convert queue</CardTitle>
-          <CardDescription>Hàng đợi FFmpeg (Asynq)</CardDescription>
+    <Card size="sm" className="gap-3 py-3 sm:gap-4 sm:py-4">
+      <CardHeader className="flex flex-row items-start justify-between gap-2 px-3 pb-0 sm:px-4">
+        <div className="min-w-0">
+          <CardTitle className="text-base sm:text-lg">Convert queue</CardTitle>
+          <CardDescription className="text-xs sm:text-sm">
+            Hàng đợi FFmpeg (Asynq)
+          </CardDescription>
         </div>
         {queue.paused ? <Badge variant="secondary">Paused</Badge> : null}
       </CardHeader>
-      <CardContent className="space-y-4">
-        <div className="grid gap-3 sm:grid-cols-4">
-          <div className="rounded-lg border bg-muted/30 p-3">
-            <p className="text-2xl font-bold tabular-nums">{queue.depth}</p>
-            <p className="text-xs text-muted-foreground">
-              Độ sâu{queue.max_depth ? ` / ${queue.max_depth}` : ""}
-            </p>
-          </div>
-          <div className="rounded-lg border bg-muted/30 p-3">
-            <p className="text-2xl font-bold tabular-nums">{pending}</p>
-            <p className="text-xs text-muted-foreground">Chờ</p>
-          </div>
-          <div className="rounded-lg border bg-muted/30 p-3">
-            <p className="text-2xl font-bold tabular-nums">{active}</p>
-            <p className="text-xs text-muted-foreground">Đang chạy</p>
-          </div>
-          <div className="rounded-lg border bg-muted/30 p-3">
-            <p className="text-2xl font-bold tabular-nums">{failed}</p>
-            <p className="text-xs text-muted-foreground">Thất bại</p>
-          </div>
+      <CardContent className="space-y-3 px-3 sm:space-y-4 sm:px-4">
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 sm:gap-3">
+          {stats.map((s) => (
+            <div
+              key={s.label}
+              className="rounded-lg border bg-muted/30 p-2.5 sm:p-3"
+            >
+              <p className="text-xl font-bold tabular-nums sm:text-2xl">
+                {s.value}
+              </p>
+              <p className="text-[11px] text-muted-foreground sm:text-xs">
+                {s.label}
+              </p>
+            </div>
+          ))}
         </div>
 
-        {depthPercent != null ? (
-          <Progress value={depthPercent} />
-        ) : null}
+        {depthPercent != null ? <Progress value={depthPercent} /> : null}
 
         <Link
           href="/system/queue"
-          className="text-sm font-medium underline-offset-4 hover:underline"
+          className="text-xs font-medium underline-offset-4 hover:underline sm:text-sm"
         >
           Quản lý queue
         </Link>

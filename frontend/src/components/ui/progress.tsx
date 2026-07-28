@@ -17,7 +17,7 @@ export function Progress({
       aria-valuemax={100}
     >
       <div
-        className={`h-full rounded-full transition-all duration-500 ease-out ${indicatorClassName}`}
+        className={`h-full rounded-full bg-primary transition-all duration-500 ease-out ${indicatorClassName}`}
         style={{ width: `${pct}%` }}
       />
     </div>

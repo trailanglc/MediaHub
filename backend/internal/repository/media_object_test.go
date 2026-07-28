@@ -14,7 +14,7 @@ func testPool(t *testing.T) *repository.MediaObjectRepository {
 	t.Helper()
 	dsn := os.Getenv("DB_DSN")
 	if dsn == "" {
-		dsn = "postgres://mediahub:mediahub@localhost:5432/mediahub?sslmode=disable"
+		dsn = "postgres://mediahub:mediahub@localhost:15432/mediahub?sslmode=disable"
 	}
 	pool, err := postgres.NewPool(context.Background(), dsn, 0, 0)
 	if err != nil {

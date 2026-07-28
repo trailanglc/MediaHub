@@ -55,6 +55,8 @@ export function SetupForm({ showSetupToken }: { showSetupToken: boolean }) {
       if (err instanceof ApiError) {
         const body = err.body as { message?: string };
         setSubmitError(body?.message ?? err.message);
+      } else if (err instanceof Error && err.message) {
+        setSubmitError(err.message);
       } else {
         setSubmitError("Không thể tạo Owner. Vui lòng thử lại.");
       }

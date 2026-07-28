@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/anhtuanlc/mediahub/internal/authz"
+	"github.com/anhtuanlc/mediahub/internal/integration"
 	convertprogress "github.com/anhtuanlc/mediahub/internal/platform/convert"
 	"github.com/anhtuanlc/mediahub/internal/platform/rediscache"
 	"github.com/anhtuanlc/mediahub/internal/platform/resource"
@@ -63,24 +64,27 @@ type StreamPolicyDTO struct {
 }
 
 type VideoDTO struct {
-	PublicID        string            `json:"public_id"`
-	Name            string            `json:"name"`
-	MimeType        *string           `json:"mime_type,omitempty"`
-	SizeBytes       int64             `json:"size_bytes"`
-	HLSStatus       string            `json:"hls_status"`
-	DurationSeconds *int              `json:"duration_seconds,omitempty"`
-	Width           *int              `json:"width,omitempty"`
-	Height          *int              `json:"height,omitempty"`
-	Codec           *string           `json:"codec,omitempty"`
-	BitrateBps      *int64            `json:"bitrate_bps,omitempty"`
-	LastError       *string           `json:"last_error,omitempty"`
-	ThumbnailURL    *string           `json:"thumbnail_url,omitempty"`
-	CreatedAt       time.Time         `json:"created_at"`
-	UpdatedAt       time.Time         `json:"updated_at"`
-	Capabilities    VideoCapabilities `json:"capabilities"`
-	LatestJob       *ConvertJobDTO       `json:"latest_job,omitempty"`
-	StreamPolicy    *StreamPolicyDTO     `json:"stream_policy,omitempty"`
-	ConvertProgress *ConvertProgressDTO  `json:"convert_progress,omitempty"`
+	PublicID         string             `json:"public_id"`
+	ParentPublicID   *string            `json:"parent_public_id,omitempty"`
+	CategoryPublicID *string            `json:"category_public_id,omitempty"`
+	CategoryName     *string            `json:"category_name,omitempty"`
+	Name             string             `json:"name"`
+	MimeType         *string            `json:"mime_type,omitempty"`
+	SizeBytes        int64              `json:"size_bytes"`
+	HLSStatus        string             `json:"hls_status"`
+	DurationSeconds  *int               `json:"duration_seconds,omitempty"`
+	Width            *int               `json:"width,omitempty"`
+	Height           *int               `json:"height,omitempty"`
+	Codec            *string            `json:"codec,omitempty"`
+	BitrateBps       *int64             `json:"bitrate_bps,omitempty"`
+	LastError        *string            `json:"last_error,omitempty"`
+	ThumbnailURL     *string            `json:"thumbnail_url,omitempty"`
+	CreatedAt        time.Time          `json:"created_at"`
+	UpdatedAt        time.Time          `json:"updated_at"`
+	Capabilities     VideoCapabilities  `json:"capabilities"`
+	LatestJob        *ConvertJobDTO     `json:"latest_job,omitempty"`
+	StreamPolicy     *StreamPolicyDTO   `json:"stream_policy,omitempty"`
+	ConvertProgress  *ConvertProgressDTO `json:"convert_progress,omitempty"`
 }
 
 type ConvertProgressDTO struct {
@@ -95,15 +99,18 @@ type HLSAccessDTO struct {
 }
 
 type VideoService struct {
-	videos    *repository.VideoRepository
-	objects   *repository.MediaObjectRepository
-	authz     *authz.Service
-	audit     *repository.AuditRepository
-	settings  *SettingsService
-	store     storage.ObjectStorage
-	enqueue   *ConvertEnqueue
+	videos          *repository.VideoRepository
+	categories      *repository.VideoCategoryRepository
+	objects         *repository.MediaObjectRepository
+	authz           *authz.Service
+	audit           *repository.AuditRepository
+	settings        *SettingsService
+	store           storage.ObjectStorage
+	enqueue         *ConvertEnqueue
 	streamTok       *StreamTokenService
 	streamBaseURL   string
+	assetURLTTL     time.Duration
+	ffmpegPath      string
 	convertProgress *convertprogress.ProgressStore
 	cache           *rediscache.Store
 	resources       *resource.Reader
@@ -134,9 +141,24 @@ func NewVideoService(
 		enqueue:         enqueue,
 		streamTok:       streamTok,
 		streamBaseURL:   streamBaseURL,
+		assetURLTTL:     24 * time.Hour,
+		ffmpegPath:      "ffmpeg",
 		convertProgress: convertProgress,
 		cache:           cache,
 		resources:       resources,
+	}
+}
+
+func (s *VideoService) SetCategories(categories *repository.VideoCategoryRepository) {
+	s.categories = categories
+}
+
+func (s *VideoService) SetDeliveryOptions(assetURLTTL time.Duration, ffmpegPath string) {
+	if assetURLTTL > 0 {
+		s.assetURLTTL = assetURLTTL
+	}
+	if strings.TrimSpace(ffmpegPath) != "" {
+		s.ffmpegPath = ffmpegPath
 	}
 }
 
@@ -172,10 +194,12 @@ func (s *VideoService) attachConvertProgress(ctx context.Context, dto *VideoDTO)
 }
 
 type ListVideosInput struct {
-	HLSStatus []string
-	Query     string
-	Cursor    int64
-	Limit     int
+	HLSStatus      []string
+	Query          string
+	Cursor         int64
+	Limit          int
+	CategoryFilter string // "all" | "uncategorized" | "" (uncategorized)
+	CategoryID     *uuid.UUID
 }
 
 func (s *VideoService) videoCapabilities(ctx context.Context, userID int64, role string, objectID int64) VideoCapabilities {
@@ -263,14 +287,35 @@ func (s *VideoService) rowToDTO(ctx context.Context, userID int64, role string, 
 		UpdatedAt:       m.UpdatedAt,
 		Capabilities:    caps,
 	}
+	if m.ParentPublic != nil {
+		p := m.ParentPublic.String()
+		dto.ParentPublicID = &p
+	}
+	if row.CategoryPublicID != nil {
+		p := row.CategoryPublicID.String()
+		dto.CategoryPublicID = &p
+	}
+	if row.CategoryName != nil {
+		n := *row.CategoryName
+		dto.CategoryName = &n
+	}
 	thumbKey := a.ThumbnailKey
 	if thumbKey == nil || *thumbKey == "" {
 		thumbKey = m.ThumbnailKey
 	}
+	// Thumbnail is produced by convert/download workers only — never backfill
+	// (download + ffmpeg) on the List/Get request path.
 	if thumbKey != nil && *thumbKey != "" && caps.Read {
-		if u, err := s.store.PresignGetObject(ctx, *thumbKey, 15*time.Minute); err == nil {
-			dto.ThumbnailURL = &u
+		if m.ThumbnailKey == nil || *m.ThumbnailKey == "" {
+			_ = s.objects.SetThumbnailKey(ctx, m.ID, *thumbKey)
+			m.ThumbnailKey = thumbKey
 		}
+		ttl := s.assetURLTTL
+		if ttl <= 0 {
+			ttl = 24 * time.Hour
+		}
+		u := s.streamTok.BuildAssetURL(s.streamBaseURL, m.PublicID.String(), integration.AssetVariantThumbnail, ttl)
+		dto.ThumbnailURL = &u
 	}
 	job, _ := s.videos.LatestJobForAsset(ctx, a.ID)
 	dto.LatestJob = jobToDTO(job)
@@ -292,12 +337,29 @@ func (s *VideoService) List(ctx context.Context, userID int64, role string, in L
 	if limit <= 0 || limit > 100 {
 		limit = 50
 	}
-	rows, err := s.videos.ListVideos(ctx, repository.VideoListFilter{
-		HLSStatus: in.HLSStatus,
-		Query:     in.Query,
-		Cursor:    in.Cursor,
-		Limit:     limit + 1,
-	})
+	filter := repository.VideoListFilter{
+		HLSStatus:      in.HLSStatus,
+		Query:          in.Query,
+		Cursor:         in.Cursor,
+		Limit:          limit + 1,
+		CategoryFilter: in.CategoryFilter,
+	}
+	if in.CategoryID != nil {
+		if s.categories == nil {
+			return nil, nil, ErrVideoCategoryNotFound
+		}
+		cat, err := s.categories.GetByPublicID(ctx, *in.CategoryID)
+		if err != nil {
+			if errors.Is(err, repository.ErrVideoCategoryNotFound) {
+				return nil, nil, ErrVideoCategoryNotFound
+			}
+			return nil, nil, err
+		}
+		id := cat.ID
+		filter.CategoryID = &id
+		filter.CategoryFilter = ""
+	}
+	rows, err := s.videos.ListVideos(ctx, filter)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -372,6 +434,47 @@ func (s *VideoService) Get(ctx context.Context, userID int64, role string, publi
 		return nil, ErrVideoAccessDenied
 	}
 	return s.rowToDTO(ctx, userID, role, row, true, nil)
+}
+
+type SetVideoCategoryInput struct {
+	// CategoryPublicID nil clears category; non-nil assigns to that category.
+	CategoryPublicID *uuid.UUID `json:"category_public_id"`
+}
+
+func (s *VideoService) SetCategory(ctx context.Context, userID int64, role string, publicID uuid.UUID, in SetVideoCategoryInput) (*VideoDTO, error) {
+	row, err := s.videos.GetByObjectPublicID(ctx, publicID)
+	if err != nil {
+		if errors.Is(err, repository.ErrVideoAssetNotFound) {
+			return nil, ErrVideoNotFound
+		}
+		return nil, err
+	}
+	if !s.videoCapabilities(ctx, userID, role, row.Media.ID).Update {
+		return nil, ErrVideoAccessDenied
+	}
+	var categoryID *int64
+	if in.CategoryPublicID != nil {
+		if s.categories == nil {
+			return nil, ErrVideoCategoryNotFound
+		}
+		cat, err := s.categories.GetByPublicID(ctx, *in.CategoryPublicID)
+		if err != nil {
+			if errors.Is(err, repository.ErrVideoCategoryNotFound) {
+				return nil, ErrVideoCategoryNotFound
+			}
+			return nil, err
+		}
+		id := cat.ID
+		categoryID = &id
+	}
+	if err := s.videos.SetVideoCategory(ctx, row.Asset.ID, categoryID); err != nil {
+		return nil, err
+	}
+	updated, err := s.videos.GetByObjectPublicID(ctx, publicID)
+	if err != nil {
+		return nil, err
+	}
+	return s.rowToDTO(ctx, userID, role, updated, true, nil)
 }
 
 func (s *VideoService) StartConvert(ctx context.Context, userID int64, role, ip, ua string, publicID uuid.UUID, input StartConvertInput) (*ConvertJobDTO, error) {

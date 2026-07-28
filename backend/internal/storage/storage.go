@@ -33,4 +33,6 @@ type ObjectStorage interface {
 	// HashObjectSHA256 streams the object and returns a lowercase hex digest.
 	HashObjectSHA256(ctx context.Context, key string, sizeBytes int64) (string, error)
 	DeleteObjectsOlderThan(ctx context.Context, prefix string, olderThan time.Time) (int, error)
+	// ListObjectKeys returns object keys under prefix (paginated).
+	ListObjectKeys(ctx context.Context, prefix string) ([]string, error)
 }

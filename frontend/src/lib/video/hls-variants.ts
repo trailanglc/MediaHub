@@ -1,9 +1,8 @@
 /** Renditions supported by the convert API (must match backend transcode.KnownVariants). */
 export const HLS_VARIANT_OPTIONS = [
+  { id: "1440p", label: "1440p (2K)", height: 1440 },
   { id: "1080p", label: "1080p (Full HD)", height: 1080 },
   { id: "720p", label: "720p (HD)", height: 720 },
-  { id: "480p", label: "480p (SD)", height: 480 },
-  { id: "360p", label: "360p (Tiết kiệm)", height: 360 },
 ] as const;
 
 export type HLSVariantId = (typeof HLS_VARIANT_OPTIONS)[number]["id"];
@@ -43,7 +42,7 @@ export function variantsAvailableForSource(src: SourceProfile): HLSVariantId[] {
 
 export function defaultVariantSelection(src: SourceProfile): HLSVariantId[] {
   const available = variantsAvailableForSource(src);
-  return available.length > 0 ? available : ["480p"];
+  return available.length > 0 ? available : ["720p"];
 }
 
 export function formatSourceBitrate(bps?: number | null): string | null {

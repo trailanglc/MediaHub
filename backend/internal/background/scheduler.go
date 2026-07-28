@@ -15,18 +15,20 @@ const schedulerTickerShutdownTimeout = 30 * time.Second
 
 // Scheduler runs periodic maintenance jobs (storage deletions, upload expiry, trash purge, …).
 type Scheduler struct {
-	Log               *zap.Logger
-	Upload            *service.UploadService
-	StorageCleanup    *service.StorageCleanupService
-	DeletionRepo      *repository.StorageDeletionRepository
-	Media             *service.MediaObjectService
-	MediaRepo         *repository.MediaObjectRepository
-	Settings          *service.SettingsService
-	Videos            *repository.VideoRepository
-	VideoSvc          *service.VideoService
-	Refresh           *repository.RefreshTokenRepository
-	Resources         *resource.Reader
-	ConvertJobTimeout time.Duration
+	Log                *zap.Logger
+	Upload             *service.UploadService
+	StorageCleanup     *service.StorageCleanupService
+	DeletionRepo       *repository.StorageDeletionRepository
+	Media              *service.MediaObjectService
+	MediaRepo          *repository.MediaObjectRepository
+	Settings           *service.SettingsService
+	Videos             *repository.VideoRepository
+	VideoSvc           *service.VideoService
+	DownloadJobs       *repository.DownloadJobRepository
+	Refresh            *repository.RefreshTokenRepository
+	Resources          *resource.Reader
+	ConvertJobTimeout  time.Duration
+	DownloadJobTimeout time.Duration
 }
 
 // Run blocks until ctx is cancelled. Jobs run once on start where the API previously did.
@@ -69,6 +71,19 @@ func (s *Scheduler) Run(ctx context.Context) {
 			olderThan = 2*time.Hour + 5*time.Minute
 		}
 		return s.VideoSvc.FailStaleRunningJobs(ctx, olderThan)
+	})
+
+	wg.Add(1)
+	go s.runTicker(&wg, ctx, 5*time.Minute, "stale download jobs", func(ctx context.Context) (int, error) {
+		if s.DownloadJobs == nil {
+			return 0, nil
+		}
+		olderThan := s.DownloadJobTimeout + 5*time.Minute
+		if olderThan <= 0 {
+			olderThan = 2*time.Hour + 5*time.Minute
+		}
+		n, err := s.DownloadJobs.FailStaleRunning(ctx, olderThan)
+		return int(n), err
 	})
 
 	wg.Add(1)

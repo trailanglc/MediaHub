@@ -10,7 +10,7 @@ import (
 func TestWrapPostgres_connectionRefused(t *testing.T) {
 	err := WrapPostgres(
 		&net.OpError{Op: "dial", Err: errors.New("connect: connection refused")},
-		"postgres://mediahub:secret@localhost:5432/mediahub?sslmode=disable",
+		"postgres://mediahub:secret@localhost:15432/mediahub?sslmode=disable",
 	)
 	var de *DependencyError
 	if !errors.As(err, &de) {

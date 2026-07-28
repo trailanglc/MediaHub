@@ -13,6 +13,7 @@ import {
   type HLSStatus,
 } from "@/lib/api/api-client";
 import { HlsPlayer } from "@/components/videos/hls-player";
+import { VideoTitleActions } from "@/components/videos/video-title-actions";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -56,6 +57,7 @@ function convertStageLabel(stage: string): string {
     starting: "Bắt đầu xử lý",
     download: "Tải file gốc",
     probe: "Đọc metadata",
+    encode_1440p: "Chuyển mã 1440p (2K)",
     encode_1080p: "Chuyển mã 1080p",
     encode_720p: "Chuyển mã 720p",
     encode_480p: "Chuyển mã 480p",
@@ -168,9 +170,11 @@ export function VideoDetail({ id }: { id: string }) {
 
   if (isLoading || !video) {
     return (
-      <div className="space-y-6">
-        <Skeleton className="h-8 w-64" />
-        <Skeleton className="aspect-video w-full rounded-xl" />
+      <div className="space-y-4 md:space-y-6">
+        <Skeleton className="h-8 w-48" />
+        <div className="-mx-4 w-[calc(100%+2rem)] md:mx-0 md:w-full">
+          <Skeleton className="aspect-video w-full md:rounded-xl" />
+        </div>
       </div>
     );
   }
@@ -208,9 +212,9 @@ export function VideoDetail({ id }: { id: string }) {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4 md:space-y-6">
       <PageHeader
-        title={video.name}
+        title={<VideoTitleActions video={video} />}
         description={`Trạng thái HLS: ${statusLabel[video.hls_status]}`}
         actions={
           <Badge variant={video.hls_status === "ready" ? "default" : "secondary"}>
@@ -219,47 +223,56 @@ export function VideoDetail({ id }: { id: string }) {
         }
       />
 
-      <div className="grid gap-6 lg:grid-cols-3">
-        <Card className="lg:col-span-2">
-          <CardHeader>
-            <CardTitle>Player HLS</CardTitle>
-            <CardDescription>
-              Chỉ phát luồng HLS đã chuyển mã — không phát file gốc.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            {hlsReady && hlsAccess?.master_url ? (
-              <HlsPlayer src={hlsAccess.master_url} />
-            ) : isConverting ? (
-              <div className="flex aspect-video flex-col items-center justify-center gap-4 rounded-lg bg-muted px-6 py-8">
-                <Loader2Icon className="size-10 animate-spin text-primary" />
-                <div className="w-full max-w-md space-y-2 text-center">
-                  <p className="text-sm font-medium">
-                    {progress
-                      ? convertStageLabel(progress.stage)
-                      : statusLabel[video.hls_status]}
-                  </p>
-                  <Progress
-                    value={progress?.percent ?? (video.hls_status === "pending" ? 8 : 15)}
-                    className="h-2"
-                  />
-                  <p className="text-xs text-muted-foreground tabular-nums">
-                    {progress?.percent ?? 0}%
-                    {video.duration_seconds
-                      ? ` · ~${Math.ceil(video.duration_seconds / 60)} phút video`
-                      : ""}
-                  </p>
+      <div className="grid gap-4 md:gap-6 lg:grid-cols-3">
+        {/* Mobile: full-bleed player (cancel AppShell p-4). Desktop: card. */}
+        <div className="-mx-4 w-[calc(100%+2rem)] min-w-0 md:mx-0 md:w-full lg:col-span-2">
+          <div className="overflow-hidden bg-card md:rounded-xl md:ring-1 md:ring-foreground/10">
+            <div className="hidden px-4 pt-4 md:block">
+              <h2 className="text-base font-medium">Player HLS</h2>
+              <p className="mt-1 text-sm text-muted-foreground">
+                Chỉ phát luồng HLS đã chuyển mã — không phát file gốc.
+              </p>
+            </div>
+            <div className="md:p-4 md:pt-3">
+              {hlsReady && hlsAccess?.master_url ? (
+                <HlsPlayer
+                  src={hlsAccess.master_url}
+                  className="rounded-none md:rounded-lg"
+                />
+              ) : isConverting ? (
+                <div className="flex aspect-video flex-col items-center justify-center gap-4 bg-muted px-4 py-8 md:rounded-lg md:px-6">
+                  <Loader2Icon className="size-10 animate-spin text-primary" />
+                  <div className="w-full max-w-md space-y-2 text-center">
+                    <p className="text-sm font-medium">
+                      {progress
+                        ? convertStageLabel(progress.stage)
+                        : statusLabel[video.hls_status]}
+                    </p>
+                    <Progress
+                      value={
+                        progress?.percent ??
+                        (video.hls_status === "pending" ? 8 : 15)
+                      }
+                      className="h-2"
+                    />
+                    <p className="text-xs text-muted-foreground tabular-nums">
+                      {progress?.percent ?? 0}%
+                      {video.duration_seconds
+                        ? ` · ~${Math.ceil(video.duration_seconds / 60)} phút video`
+                        : ""}
+                    </p>
+                  </div>
                 </div>
-              </div>
-            ) : (
-              <div className="flex aspect-video items-center justify-center rounded-lg bg-muted text-sm text-muted-foreground">
-                Chưa có HLS. Nhấn Convert để tạo luồng phát.
-              </div>
-            )}
-          </CardContent>
-        </Card>
+              ) : (
+                <div className="flex aspect-video items-center justify-center bg-muted px-4 text-sm text-muted-foreground md:rounded-lg">
+                  Chưa có HLS. Nhấn Convert để tạo luồng phát.
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
 
-        <div className="space-y-4">
+        <div className="space-y-4 px-0">
           <Card>
             <CardHeader>
               <CardTitle className="text-base">Hành động</CardTitle>

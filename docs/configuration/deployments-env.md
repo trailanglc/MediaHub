@@ -39,8 +39,11 @@ STORAGE_BUCKET=mediahub
 
 ```env
 # backend/.env
-DB_DSN=postgres://mediahub:your_password@localhost:5432/mediahub?sslmode=disable
+DB_DSN=postgres://mediahub:your_password@localhost:15432/mediahub?sslmode=disable
+REDIS_ADDR=localhost:16379
 STORAGE_ACCESS_KEY=mediahub
 STORAGE_SECRET_KEY=your_password
 STORAGE_BUCKET=mediahub
 ```
+
+> Host ports mặc định của Compose MediaHub: Postgres **15432**, Redis **16379** (tránh chiếm 5432/6379). Trong container vẫn là 5432/6379.

@@ -28,10 +28,20 @@ const (
 	KeyStorageQuotaBytes              = "storage.quota_bytes"
 	KeyMaintenanceAuditRetentionDays  = "maintenance.audit_retention_days"
 	KeyMaintenanceTrashRetentionDays  = "maintenance.trash_retention_days"
+	KeyDownloadMaxConcurrent          = "download.max_concurrent"
+	KeyDownloadChunkConcurrency       = "download.chunk_concurrency"
+	KeyDownloadJobTimeoutSeconds      = "download.job_timeout_seconds"
+	KeyDownloadAnalyzeTimeoutSeconds  = "download.analyze_timeout_seconds"
+	KeyDownloadQueueMaxDepth          = "download.queue_max_depth"
 	// DefaultTrashRetentionDays is how long soft-deleted objects stay before auto-purge (0 = disabled).
 	DefaultTrashRetentionDays = 30
 	// DefaultMaxUploadBytes is the default per-file upload limit (5 GiB).
 	DefaultMaxUploadBytes int64 = 5 * 1024 * 1024 * 1024
+	// DownloadAsynqConcurrencyCeiling is the Asynq server concurrency hard cap;
+	// Settings download.max_concurrent (1–16) limits work via DynamicGate.
+	DownloadAsynqConcurrencyCeiling = 16
+	MaxDownloadJobTimeoutSeconds    = 86400 // 24h
+	MaxDownloadAnalyzeTimeoutSeconds = 600
 )
 
 var (
@@ -105,6 +115,14 @@ type SettingsMaintenance struct {
 	TrashRetentionDays int `json:"trash_retention_days"`
 }
 
+type SettingsDownload struct {
+	MaxConcurrent          int `json:"max_concurrent"`
+	ChunkConcurrency       int `json:"chunk_concurrency"`
+	JobTimeoutSeconds      int `json:"job_timeout_seconds"`
+	AnalyzeTimeoutSeconds  int `json:"analyze_timeout_seconds"`
+	QueueMaxDepth          int `json:"queue_max_depth"`
+}
+
 type SettingsEditable struct {
 	Workspace   SettingsWorkspace   `json:"workspace"`
 	Homepage    SettingsHomepage    `json:"homepage"`
@@ -113,6 +131,7 @@ type SettingsEditable struct {
 	Streaming   SettingsStreaming   `json:"streaming"`
 	Storage     SettingsStorage     `json:"storage"`
 	Maintenance SettingsMaintenance `json:"maintenance"`
+	Download    SettingsDownload    `json:"download"`
 }
 
 type SettingsInfrastructure struct {
@@ -153,6 +172,7 @@ type SettingsPatch struct {
 	Streaming   *SettingsStreamingPatch   `json:"streaming,omitempty"`
 	Storage     *SettingsStoragePatch     `json:"storage,omitempty"`
 	Maintenance *SettingsMaintenancePatch `json:"maintenance,omitempty"`
+	Download    *SettingsDownloadPatch    `json:"download,omitempty"`
 }
 
 type SettingsWorkspacePatch struct {
@@ -183,6 +203,53 @@ type SettingsStoragePatch struct {
 type SettingsMaintenancePatch struct {
 	AuditRetentionDays *int `json:"audit_retention_days,omitempty"`
 	TrashRetentionDays *int `json:"trash_retention_days,omitempty"`
+}
+
+type SettingsDownloadPatch struct {
+	MaxConcurrent         *int `json:"max_concurrent,omitempty"`
+	ChunkConcurrency      *int `json:"chunk_concurrency,omitempty"`
+	JobTimeoutSeconds     *int `json:"job_timeout_seconds,omitempty"`
+	AnalyzeTimeoutSeconds *int `json:"analyze_timeout_seconds,omitempty"`
+	QueueMaxDepth         *int `json:"queue_max_depth,omitempty"`
+}
+
+// DownloadLimits returns effective download knobs (DB settings with env fallbacks).
+func (s *SettingsService) DownloadLimits(ctx context.Context) (SettingsDownload, error) {
+	resp, err := s.Get(ctx)
+	if err != nil || resp == nil {
+		return s.defaultDownloadSettings(), err
+	}
+	return resp.Editable.Download, nil
+}
+
+func (s *SettingsService) defaultDownloadSettings() SettingsDownload {
+	jobSec := int(s.cfg.DownloadJobTimeout / time.Second)
+	if jobSec < 1 {
+		jobSec = 7200
+	}
+	analyzeSec := int(s.cfg.DownloadAnalyzeTimeout / time.Second)
+	if analyzeSec < 1 {
+		analyzeSec = 60
+	}
+	maxConc := s.cfg.DownloadMaxConcurrent
+	if maxConc < 1 {
+		maxConc = 2
+	}
+	chunk := s.cfg.DownloadChunkConcurrency
+	if chunk < 1 {
+		chunk = 2
+	}
+	depth := s.cfg.DownloadQueueMaxDepth
+	if depth < 1 {
+		depth = 50
+	}
+	return SettingsDownload{
+		MaxConcurrent:         maxConc,
+		ChunkConcurrency:      chunk,
+		JobTimeoutSeconds:     jobSec,
+		AnalyzeTimeoutSeconds: analyzeSec,
+		QueueMaxDepth:         depth,
+	}
 }
 
 func (s *SettingsService) Get(ctx context.Context) (*SettingsResponse, error) {
@@ -293,6 +360,18 @@ func (s *SettingsService) buildEditable(raw map[string]json.RawMessage) Settings
 			AuditRetentionDays: intVal(raw, KeyMaintenanceAuditRetentionDays, 90),
 			TrashRetentionDays: intVal(raw, KeyMaintenanceTrashRetentionDays, DefaultTrashRetentionDays),
 		},
+		Download: s.downloadFromRaw(raw),
+	}
+}
+
+func (s *SettingsService) downloadFromRaw(raw map[string]json.RawMessage) SettingsDownload {
+	def := s.defaultDownloadSettings()
+	return SettingsDownload{
+		MaxConcurrent:         intVal(raw, KeyDownloadMaxConcurrent, def.MaxConcurrent),
+		ChunkConcurrency:      intVal(raw, KeyDownloadChunkConcurrency, def.ChunkConcurrency),
+		JobTimeoutSeconds:     intVal(raw, KeyDownloadJobTimeoutSeconds, def.JobTimeoutSeconds),
+		AnalyzeTimeoutSeconds: intVal(raw, KeyDownloadAnalyzeTimeoutSeconds, def.AnalyzeTimeoutSeconds),
+		QueueMaxDepth:         intVal(raw, KeyDownloadQueueMaxDepth, def.QueueMaxDepth),
 	}
 }
 
@@ -417,6 +496,39 @@ func (s *SettingsService) patchToUpserts(ctx context.Context, patch SettingsPatc
 				return nil, fmt.Errorf("%w: maintenance.trash_retention_days", ErrInvalidSettings)
 			}
 			upserts = append(upserts, repository.SettingUpsert{Key: KeyMaintenanceTrashRetentionDays, Value: *patch.Maintenance.TrashRetentionDays})
+		}
+	}
+
+	if patch.Download != nil {
+		if patch.Download.MaxConcurrent != nil {
+			if *patch.Download.MaxConcurrent < 1 || *patch.Download.MaxConcurrent > DownloadAsynqConcurrencyCeiling {
+				return nil, fmt.Errorf("%w: download.max_concurrent", ErrInvalidSettings)
+			}
+			upserts = append(upserts, repository.SettingUpsert{Key: KeyDownloadMaxConcurrent, Value: *patch.Download.MaxConcurrent})
+		}
+		if patch.Download.ChunkConcurrency != nil {
+			if *patch.Download.ChunkConcurrency < 1 || *patch.Download.ChunkConcurrency > DownloadAsynqConcurrencyCeiling {
+				return nil, fmt.Errorf("%w: download.chunk_concurrency", ErrInvalidSettings)
+			}
+			upserts = append(upserts, repository.SettingUpsert{Key: KeyDownloadChunkConcurrency, Value: *patch.Download.ChunkConcurrency})
+		}
+		if patch.Download.JobTimeoutSeconds != nil {
+			if *patch.Download.JobTimeoutSeconds < 1 || *patch.Download.JobTimeoutSeconds > MaxDownloadJobTimeoutSeconds {
+				return nil, fmt.Errorf("%w: download.job_timeout_seconds", ErrInvalidSettings)
+			}
+			upserts = append(upserts, repository.SettingUpsert{Key: KeyDownloadJobTimeoutSeconds, Value: *patch.Download.JobTimeoutSeconds})
+		}
+		if patch.Download.AnalyzeTimeoutSeconds != nil {
+			if *patch.Download.AnalyzeTimeoutSeconds < 1 || *patch.Download.AnalyzeTimeoutSeconds > MaxDownloadAnalyzeTimeoutSeconds {
+				return nil, fmt.Errorf("%w: download.analyze_timeout_seconds", ErrInvalidSettings)
+			}
+			upserts = append(upserts, repository.SettingUpsert{Key: KeyDownloadAnalyzeTimeoutSeconds, Value: *patch.Download.AnalyzeTimeoutSeconds})
+		}
+		if patch.Download.QueueMaxDepth != nil {
+			if *patch.Download.QueueMaxDepth < 1 {
+				return nil, fmt.Errorf("%w: download.queue_max_depth", ErrInvalidSettings)
+			}
+			upserts = append(upserts, repository.SettingUpsert{Key: KeyDownloadQueueMaxDepth, Value: *patch.Download.QueueMaxDepth})
 		}
 	}
 

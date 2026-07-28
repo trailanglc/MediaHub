@@ -1,11 +1,13 @@
+import type { ReactNode } from "react";
+
 export function PageHeader({
   title,
   description,
   actions,
 }: {
-  title: string;
-  description?: React.ReactNode;
-  actions?: React.ReactNode;
+  title: ReactNode;
+  description?: ReactNode;
+  actions?: ReactNode;
 }) {
   return (
     <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">

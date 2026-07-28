@@ -17,7 +17,7 @@ func testPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 	dsn := os.Getenv("DB_DSN")
 	if dsn == "" {
-		dsn = "postgres://mediahub:Anhtuanlc.12@localhost:5432/mediahub?sslmode=disable"
+		dsn = "postgres://mediahub:Anhtuanlc.12@localhost:15432/mediahub?sslmode=disable"
 	}
 	pool, err := postgres.NewPool(context.Background(), dsn, 0, 0)
 	if err != nil {

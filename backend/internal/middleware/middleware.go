@@ -113,11 +113,19 @@ func accessLogTier(path string) accessTier {
 	return accessTierControl
 }
 
-func CORS(allowedOrigin string) gin.HandlerFunc {
+func CORS(allowedOrigin string, appEnv string) gin.HandlerFunc {
+	open := appEnv != "production"
 	return func(c *gin.Context) {
-		c.Header("Access-Control-Allow-Origin", allowedOrigin)
+		origin := c.GetHeader("Origin")
+		allow := allowedOrigin
+		// Dev / home lab: reflect request Origin so LAN IPs (and localhost) both work with credentials.
+		if open && origin != "" {
+			allow = origin
+		}
+		c.Header("Access-Control-Allow-Origin", allow)
+		c.Header("Vary", "Origin")
 		c.Header("Access-Control-Allow-Credentials", "true")
-		c.Header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Request-ID")
+		c.Header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Request-ID, X-Setup-Token")
 		c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
 		if c.Request.Method == "OPTIONS" {
 			c.AbortWithStatus(204)

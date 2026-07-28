@@ -14,6 +14,7 @@ import (
 	"github.com/anhtuanlc/mediahub/internal/platform/rediscache"
 	"github.com/anhtuanlc/mediahub/internal/platform/session"
 	convertprogress "github.com/anhtuanlc/mediahub/internal/platform/convert"
+	downloadprog "github.com/anhtuanlc/mediahub/internal/platform/download"
 	streamplat "github.com/anhtuanlc/mediahub/internal/platform/stream"
 	"github.com/anhtuanlc/mediahub/internal/platform/resource"
 	"github.com/anhtuanlc/mediahub/internal/platform/upload"
@@ -93,14 +94,23 @@ func RunAPI(ctx context.Context, s *Shared) error {
 	systemHandler := handler.NewSystemHandler(maintenanceSvc)
 
 	videoRepo := repository.NewVideoRepository(pool)
+	videoCategoryRepo := repository.NewVideoCategoryRepository(pool)
 	apiKeyRepo := repository.NewAPIKeyRepository(pool)
 	convertEnqueue := service.NewConvertEnqueue(cfg.RedisAddr, cfg.ConvertQueueMaxDepth)
 	defer convertEnqueue.Close() //nolint:errcheck
+	downloadEnqueue := service.NewDownloadEnqueue(cfg.RedisAddr, settingsSvc, cfg.DownloadQueueMaxDepth)
+	defer downloadEnqueue.Close() //nolint:errcheck
 	health.ConvertQueue = convertEnqueue
 	streamTok := service.NewStreamTokenService(cfg.StreamSigningSecret)
 	convertProg := convertprogress.NewProgressStore(redisClient)
+	downloadProg := downloadprog.NewProgressStore(redisClient)
 	videoSvc := service.NewVideoService(videoRepo, mediaRepo, authzSvc, auditRepo, settingsSvc, store, convertEnqueue, streamTok, cfg.APIPublicURL, convertProg, redisCache, resReader)
+	videoSvc.SetCategories(videoCategoryRepo)
+	videoSvc.SetDeliveryOptions(cfg.AssetDeliveryURLTTL, cfg.FFmpegPath)
 	videoSvc.SetWebhooks(webhookDispatcher)
+	videoCategorySvc := service.NewVideoCategoryService(videoCategoryRepo)
+	downloadJobRepo := repository.NewDownloadJobRepository(pool)
+	downloadSvc := service.NewDownloadService(downloadJobRepo, mediaSvc, settingsSvc, downloadEnqueue, downloadProg, cfg.YTDLPPath, cfg.DownloadAnalyzeTimeout, auditRepo)
 	streamLoader := &rediscache.StreamLoader{
 		Store:         redisCache,
 		Videos:        videoRepo,
@@ -153,7 +163,9 @@ func RunAPI(ctx context.Context, s *Shared) error {
 		Settings:   handler.NewSettingsHandler(settingsSvc, homepageAssets, logger),
 		Objects:    handler.NewObjectHandler(mediaSvc),
 		Upload:     handler.NewUploadHandler(uploadSvc, logger),
-		Videos:     handler.NewVideoHandler(videoSvc, store),
+		Videos:          handler.NewVideoHandler(videoSvc, store),
+		VideoCategories: handler.NewVideoCategoryHandler(videoCategorySvc),
+		Download:        handler.NewDownloadHandler(downloadSvc),
 		APIKeys:    handler.NewAPIKeyHandler(apiKeySvc),
 		Webhooks:   handler.NewWebhookHandler(webhookSvc),
 		Integration: handler.NewIntegrationV1Handler(integrationSvc),

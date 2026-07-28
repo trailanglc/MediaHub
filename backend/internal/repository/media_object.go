@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/anhtuanlc/mediahub/internal/mediautil"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -391,13 +392,22 @@ func (r *MediaObjectRepository) CreateWithClosure(ctx context.Context, in Create
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck
 
+	name := in.Name
+	if in.ParentID != nil {
+		resolved, err := r.resolveUniqueName(ctx, r.pool, *in.ParentID, name, nil)
+		if err != nil {
+			return nil, err
+		}
+		name = resolved
+	}
+
 	var id int64
 	err = tx.QueryRow(ctx, `
 		INSERT INTO media_objects (
 			public_id, parent_id, type, name, original_name, mime_type, size_bytes, storage_key, checksum, created_by, updated_by
 		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $10)
 		RETURNING id
-	`, in.PublicID, in.ParentID, in.Type, in.Name, in.OriginalName, in.MimeType, in.SizeBytes, in.StorageKey, in.Checksum, in.CreatedBy).Scan(&id)
+	`, in.PublicID, in.ParentID, in.Type, name, in.OriginalName, in.MimeType, in.SizeBytes, in.StorageKey, in.Checksum, in.CreatedBy).Scan(&id)
 	if err != nil {
 		return nil, fmt.Errorf("insert media object: %w", err)
 	}
@@ -441,9 +451,15 @@ func (r *MediaObjectRepository) UpdateNameTx(ctx context.Context, tx pgx.Tx, id,
 	return r.updateName(ctx, tx, id, updatedBy, name)
 }
 
-func (r *MediaObjectRepository) updateName(ctx context.Context, exec interface {
+type nameExec interface {
 	Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
-}, id, updatedBy int64, name string) error {
+}
+
+type nameQuerier interface {
+	Query(context.Context, string, ...any) (pgx.Rows, error)
+}
+
+func (r *MediaObjectRepository) updateName(ctx context.Context, exec nameExec, id, updatedBy int64, name string) error {
 	tag, err := exec.Exec(ctx, `
 		UPDATE media_objects SET name = $1, updated_by = $2, updated_at = now()
 		WHERE id = $3 AND deleted_at IS NULL
@@ -455,6 +471,67 @@ func (r *MediaObjectRepository) updateName(ctx context.Context, exec interface {
 		return ErrMediaObjectNotFound
 	}
 	return nil
+}
+
+// UpdateNameAny renames regardless of soft-delete (used before restore).
+func (r *MediaObjectRepository) UpdateNameAny(ctx context.Context, id, updatedBy int64, name string) error {
+	tag, err := r.pool.Exec(ctx, `
+		UPDATE media_objects SET name = $1, updated_by = $2, updated_at = now()
+		WHERE id = $3
+	`, name, updatedBy, id)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrMediaObjectNotFound
+	}
+	return nil
+}
+
+// ListActiveSiblingNames returns display names of active children under parentID.
+// excludeID, when set, omits that object (e.g. when renaming/moving itself).
+func (r *MediaObjectRepository) ListActiveSiblingNames(ctx context.Context, parentID int64, excludeID *int64) (map[string]struct{}, error) {
+	return r.listActiveSiblingNames(ctx, r.pool, parentID, excludeID)
+}
+
+func (r *MediaObjectRepository) listActiveSiblingNames(ctx context.Context, q nameQuerier, parentID int64, excludeID *int64) (map[string]struct{}, error) {
+	sql := `
+		SELECT name FROM media_objects
+		WHERE parent_id = $1 AND deleted_at IS NULL AND status = 'active'
+	`
+	args := []any{parentID}
+	if excludeID != nil {
+		sql += ` AND id <> $2`
+		args = append(args, *excludeID)
+	}
+	rows, err := q.Query(ctx, sql, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list sibling names: %w", err)
+	}
+	defer rows.Close()
+
+	out := make(map[string]struct{})
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, err
+		}
+		out[name] = struct{}{}
+	}
+	return out, rows.Err()
+}
+
+func (r *MediaObjectRepository) resolveUniqueName(ctx context.Context, q nameQuerier, parentID int64, desired string, excludeID *int64) (string, error) {
+	taken, err := r.listActiveSiblingNames(ctx, q, parentID, excludeID)
+	if err != nil {
+		return "", err
+	}
+	return mediautil.UniqueSiblingName(desired, taken), nil
+}
+
+// ResolveUniqueName returns a sibling-unique display name under parentID.
+func (r *MediaObjectRepository) ResolveUniqueName(ctx context.Context, parentID int64, desired string, excludeID *int64) (string, error) {
+	return r.resolveUniqueName(ctx, r.pool, parentID, desired, excludeID)
 }
 
 func (r *MediaObjectRepository) Move(ctx context.Context, objectID int64, newParentID *int64, updatedBy int64) error {
@@ -477,10 +554,30 @@ func (r *MediaObjectRepository) Move(ctx context.Context, objectID int64, newPar
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck
 
+	var currentName string
+	if err := tx.QueryRow(ctx, `
+		SELECT name FROM media_objects WHERE id = $1 AND deleted_at IS NULL
+	`, objectID).Scan(&currentName); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrMediaObjectNotFound
+		}
+		return err
+	}
+
+	name := currentName
+	if newParentID != nil {
+		exclude := objectID
+		resolved, err := r.resolveUniqueName(ctx, tx, *newParentID, currentName, &exclude)
+		if err != nil {
+			return err
+		}
+		name = resolved
+	}
+
 	tag, err := tx.Exec(ctx, `
-		UPDATE media_objects SET parent_id = $1, updated_by = $2, updated_at = now()
-		WHERE id = $3 AND deleted_at IS NULL
-	`, newParentID, updatedBy, objectID)
+		UPDATE media_objects SET parent_id = $1, name = $2, updated_by = $3, updated_at = now()
+		WHERE id = $4 AND deleted_at IS NULL
+	`, newParentID, name, updatedBy, objectID)
 	if err != nil {
 		return err
 	}

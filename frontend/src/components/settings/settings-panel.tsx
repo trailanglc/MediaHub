@@ -49,6 +49,7 @@ const TABS = [
   "general",
   "homepage",
   "media",
+  "download",
   "streaming",
   "storage",
   "security",
@@ -90,11 +91,20 @@ type FormState = SettingsEditable & {
   quotaGb: string;
 };
 
+const DEFAULT_DOWNLOAD: SettingsEditable["download"] = {
+  max_concurrent: 2,
+  chunk_concurrency: 2,
+  job_timeout_seconds: 7200,
+  analyze_timeout_seconds: 60,
+  queue_max_depth: 50,
+};
+
 function toFormState(data: SettingsResponse): FormState {
   const e = data.editable;
   return {
     ...e,
     homepage: e.homepage ?? DEFAULT_HOMEPAGE,
+    download: e.download ?? DEFAULT_DOWNLOAD,
     domainsText: domainsToText(e.streaming.global_allowed_domains),
     keywordsText: domainsToText(e.homepage?.keywords ?? []),
     schemaCustomText: schemaCustomToText(e.homepage?.schema_custom),
@@ -139,7 +149,16 @@ export function SettingsPanel() {
 
   const [draft, setDraft] = useState<FormState | null>(null);
   const baseForm = data ? toFormState(data) : null;
-  const form = draft ?? baseForm;
+  // Merge draft over base; always fill download (stale draft / old API cache may omit it).
+  const form: FormState | null =
+    baseForm == null
+      ? null
+      : {
+          ...baseForm,
+          ...(draft ?? {}),
+          download: draft?.download ?? baseForm.download ?? DEFAULT_DOWNLOAD,
+          homepage: draft?.homepage ?? baseForm.homepage,
+        };
 
   const saveMutation = useMutation({
     mutationFn: (patch: SettingsPatch) => updateSettings(patch),
@@ -234,6 +253,31 @@ export function SettingsPanel() {
     });
   };
 
+  const saveDownload = () => {
+    const d = form.download ?? DEFAULT_DOWNLOAD;
+    if (
+      d.max_concurrent < 1 ||
+      d.max_concurrent > 16 ||
+      d.chunk_concurrency < 1 ||
+      d.chunk_concurrency > 16 ||
+      d.job_timeout_seconds < 1 ||
+      d.analyze_timeout_seconds < 1 ||
+      d.queue_max_depth < 1
+    ) {
+      toast.error("Giá trị Download không hợp lệ");
+      return;
+    }
+    saveMutation.mutate({
+      download: {
+        max_concurrent: d.max_concurrent,
+        chunk_concurrency: d.chunk_concurrency,
+        job_timeout_seconds: d.job_timeout_seconds,
+        analyze_timeout_seconds: d.analyze_timeout_seconds,
+        queue_max_depth: d.queue_max_depth,
+      },
+    });
+  };
+
   const saveStreaming = () => {
     saveMutation.mutate({
       streaming: {
@@ -288,6 +332,7 @@ export function SettingsPanel() {
           <TabsTrigger value="general">Chung</TabsTrigger>
           <TabsTrigger value="homepage">Trang chủ</TabsTrigger>
           <TabsTrigger value="media">Media</TabsTrigger>
+          <TabsTrigger value="download">Download</TabsTrigger>
           <TabsTrigger value="streaming">Streaming</TabsTrigger>
           <TabsTrigger value="storage">Storage</TabsTrigger>
           <TabsTrigger value="security">Bảo mật</TabsTrigger>
@@ -651,6 +696,119 @@ export function SettingsPanel() {
                 Hiện tại: {formatBytes(form.media.max_upload_bytes)}
               </p>
               <SettingsSaveButton pending={savePending} onClick={saveMedia} />
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="download" className="mt-0">
+          <Card size="sm">
+            <CardHeader>
+              <CardTitle>Download từ URL</CardTitle>
+              <CardDescription>
+                Giới hạn song song, timeout và độ sâu queue. Thay đổi có hiệu lực ngay (không cần restart).
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <FormField
+                label="Số job song song"
+                hint="Tối đa 16. Job vượt quá sẽ chờ trong queue."
+              >
+                <Input
+                  type="number"
+                  min={1}
+                  max={16}
+                  value={form.download.max_concurrent}
+                  onChange={(e) =>
+                    setDraft({
+                      ...form,
+                      download: {
+                        ...form.download,
+                        max_concurrent: Number(e.target.value),
+                      },
+                    })
+                  }
+                />
+              </FormField>
+              <FormField
+                label="Chunk HLS song song"
+                hint="Chỉ áp dụng khi mirror HLS segments. Direct MP4 luôn 1 luồng."
+              >
+                <Input
+                  type="number"
+                  min={1}
+                  max={16}
+                  value={form.download.chunk_concurrency}
+                  onChange={(e) =>
+                    setDraft({
+                      ...form,
+                      download: {
+                        ...form.download,
+                        chunk_concurrency: Number(e.target.value),
+                      },
+                    })
+                  }
+                />
+              </FormField>
+              <FormField
+                label="Timeout mỗi job (giây)"
+                hint="7200 = 2 giờ. Tối đa 86400 (24 giờ)."
+              >
+                <Input
+                  type="number"
+                  min={1}
+                  max={86400}
+                  value={form.download.job_timeout_seconds}
+                  onChange={(e) =>
+                    setDraft({
+                      ...form,
+                      download: {
+                        ...form.download,
+                        job_timeout_seconds: Number(e.target.value),
+                      },
+                    })
+                  }
+                />
+              </FormField>
+              <FormField
+                label="Timeout analyze (giây)"
+                hint="Phân loại URL / yt-dlp / HTML. Tối đa 600."
+              >
+                <Input
+                  type="number"
+                  min={1}
+                  max={600}
+                  value={form.download.analyze_timeout_seconds}
+                  onChange={(e) =>
+                    setDraft({
+                      ...form,
+                      download: {
+                        ...form.download,
+                        analyze_timeout_seconds: Number(e.target.value),
+                      },
+                    })
+                  }
+                />
+              </FormField>
+              <FormField
+                label="Độ sâu queue tối đa"
+                hint="Từ chối enqueue mới khi pending + active + scheduled + retry đạt ngưỡng."
+              >
+                <Input
+                  type="number"
+                  min={1}
+                  value={form.download.queue_max_depth}
+                  onChange={(e) =>
+                    setDraft({
+                      ...form,
+                      download: {
+                        ...form.download,
+                        queue_max_depth: Number(e.target.value),
+                      },
+                    })
+                  }
+                />
+              </FormField>
+              <SettingsSaveButton pending={savePending} onClick={saveDownload} />
             </CardContent>
           </Card>
         </TabsContent>

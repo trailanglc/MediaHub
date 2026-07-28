@@ -23,7 +23,9 @@ type RouterDeps struct {
 	Settings    *SettingsHandler
 	Objects     *ObjectHandler
 	Upload      *UploadHandler
-	Videos      *VideoHandler
+	Videos           *VideoHandler
+	VideoCategories  *VideoCategoryHandler
+	Download         *DownloadHandler
 	APIKeys     *APIKeyHandler
 	Stream      *StreamHandler
 	Integration *IntegrationV1Handler
@@ -51,7 +53,7 @@ func NewRouter(deps RouterDeps) *gin.Engine {
 	r.Use(gin.Recovery())
 	r.Use(middleware.RequestID())
 	r.Use(middleware.AccessLogger(deps.Logger))
-	r.Use(middleware.CORS(deps.AppURL))
+	r.Use(middleware.CORS(deps.AppURL, deps.AppEnv))
 	r.Use(observability.HTTPMetricsMiddleware())
 
 	r.GET("/health", deps.Health.Liveness)
@@ -170,6 +172,23 @@ func NewRouter(deps RouterDeps) *gin.Engine {
 				protected.DELETE("/videos/:public_id/hls", deps.Videos.DeleteHLS)
 				protected.GET("/videos/:public_id/stream-policy", deps.Videos.GetStreamPolicy)
 				protected.PATCH("/videos/:public_id/stream-policy", deps.Videos.PatchStreamPolicy)
+				protected.PATCH("/videos/:public_id/category", deps.Videos.PatchCategory)
+			}
+			if deps.VideoCategories != nil {
+				protected.GET("/video-categories", deps.VideoCategories.List)
+				protected.POST("/video-categories", deps.VideoCategories.Create)
+				protected.PATCH("/video-categories/:public_id", deps.VideoCategories.Patch)
+				protected.DELETE("/video-categories/:public_id", deps.VideoCategories.Delete)
+			}
+			if deps.Download != nil {
+				protected.POST("/download/analyze", deps.Download.Analyze)
+				protected.POST("/download/jobs", deps.Download.CreateJob)
+				protected.GET("/download/jobs/stream", deps.Download.StreamJobs)
+				protected.GET("/download/jobs", deps.Download.ListJobs)
+				protected.GET("/download/jobs/:public_id", deps.Download.GetJob)
+				protected.POST("/download/jobs/:public_id/cancel", deps.Download.CancelJob)
+				protected.POST("/download/jobs/:public_id/retry", deps.Download.RetryJob)
+				protected.DELETE("/download/jobs/:public_id", deps.Download.DeleteJob)
 			}
 		}
 	}

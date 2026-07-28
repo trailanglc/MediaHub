@@ -86,6 +86,10 @@ func (h *QueueHandler) queueDepthAndPaused(ctx context.Context) (depth int, paus
 	}
 	info, err := h.Inspector.GetQueueInfo("default")
 	if err != nil {
+		// Same as ConvertEnqueue: empty Asynq queue is not a hard failure.
+		if service.IsAsynqQueueMissing(err) {
+			return 0, false, nil
+		}
 		return 0, false, err
 	}
 	if info == nil {

@@ -48,7 +48,7 @@ func newSecurityEnv(t *testing.T) *securityEnv {
 
 	dsn := os.Getenv("DB_DSN")
 	if dsn == "" {
-		dsn = "postgres://mediahub:Anhtuanlc.12@localhost:5432/mediahub?sslmode=disable"
+		dsn = "postgres://mediahub:Anhtuanlc.12@localhost:15432/mediahub?sslmode=disable"
 	}
 	pool, err := postgres.NewPool(context.Background(), dsn, 0, 0)
 	if err != nil {
@@ -57,7 +57,7 @@ func newSecurityEnv(t *testing.T) *securityEnv {
 
 	redisAddr := os.Getenv("REDIS_ADDR")
 	if redisAddr == "" {
-		redisAddr = "localhost:6379"
+		redisAddr = "localhost:16379"
 	}
 	rdb := platredis.NewClient(redisAddr)
 	if err := rdb.Ping(context.Background()).Err(); err != nil {

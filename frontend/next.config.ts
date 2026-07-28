@@ -5,6 +5,10 @@ import { fileURLToPath } from "node:url";
 const frontendRoot = path.dirname(fileURLToPath(import.meta.url));
 
 const nextConfig: NextConfig = {
+  // Production deploy: bundle tối thiểu (không cần copy cả node_modules).
+  output: "standalone",
+  // Cho phép HMR khi mở UI qua IP LAN (SSH / home lab), không chỉ localhost.
+  allowedDevOrigins: ["192.168.8.100"],
   // Giới hạn Turbopack chỉ index trong frontend/, không leo lên monorepo.
   turbopack: {
     root: frontendRoot,

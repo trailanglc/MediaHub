@@ -47,20 +47,23 @@ func RunScheduler(ctx context.Context, s *Shared) error {
 		videoRepo, mediaRepo, authzSvc, auditRepo, settingsSvc, store,
 		convertEnqueue, streamTok, cfg.APIPublicURL, convertProg, rediscache.NewStore(redisClient), resReader,
 	)
+	videoSvc.SetDeliveryOptions(cfg.AssetDeliveryURLTTL, cfg.FFmpegPath)
 
 	sched := &background.Scheduler{
-		Log:               logger,
-		Upload:            uploadSvc,
-		StorageCleanup:    storageCleanup,
-		DeletionRepo:      deletionRepo,
-		Media:             mediaSvc,
-		MediaRepo:         mediaRepo,
-		Settings:          settingsSvc,
-		Videos:            videoRepo,
-		VideoSvc:          videoSvc,
-		Refresh:           refreshRepo,
-		Resources:         resReader,
-		ConvertJobTimeout: cfg.ConvertJobTimeout,
+		Log:                logger,
+		Upload:             uploadSvc,
+		StorageCleanup:     storageCleanup,
+		DeletionRepo:       deletionRepo,
+		Media:              mediaSvc,
+		MediaRepo:          mediaRepo,
+		Settings:           settingsSvc,
+		Videos:             videoRepo,
+		VideoSvc:           videoSvc,
+		DownloadJobs:       repository.NewDownloadJobRepository(pool),
+		Refresh:            refreshRepo,
+		Resources:          resReader,
+		ConvertJobTimeout:  cfg.ConvertJobTimeout,
+		DownloadJobTimeout: cfg.DownloadJobTimeout,
 	}
 
 	logger.Info("scheduler starting")

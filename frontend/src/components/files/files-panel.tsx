@@ -101,6 +101,7 @@ export function FilesPanel() {
   const viewMode = (searchParams.get("view") as "grid" | "table") || "table";
   const typeFilter = (searchParams.get("type") as MediaObjectType | "") || "";
   const searchQ = searchParams.get("q") ?? "";
+  const highlightId = searchParams.get("highlight");
 
   const [searchInput, setSearchInput] = useState(searchQ);
   const skipSearchSyncRef = useRef(false);
@@ -315,6 +316,19 @@ export function FilesPanel() {
   useEffect(() => {
     clearSelection();
   }, [folderId, typeFilter, searchQ, trashMode, searchScope, clearSelection]);
+
+  // Định vị từ trang video: chọn + scroll tới file (?highlight=).
+  useEffect(() => {
+    if (!highlightId) return;
+    if (!items.some((o) => o.public_id === highlightId)) return;
+    setSelectedIds(new Set([highlightId]));
+    const timer = window.setTimeout(() => {
+      document
+        .querySelector(`[data-object-id="${highlightId}"]`)
+        ?.scrollIntoView({ block: "center", behavior: "smooth" });
+    }, 80);
+    return () => window.clearTimeout(timer);
+  }, [highlightId, items]);
 
   const selectable = useMemo(
     () => selectableItems(items, rootFolderId),
@@ -647,6 +661,7 @@ export function FilesPanel() {
     items,
     rootFolderId,
     selectedIds,
+    highlightedId: highlightId,
     onToggleSelect: toggleSelect,
     trashMode,
     showSearchPath,

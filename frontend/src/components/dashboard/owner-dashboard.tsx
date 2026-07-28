@@ -54,12 +54,21 @@ export function OwnerDashboard() {
   ) : undefined;
 
   return (
-    <div className="space-y-8">
-      <PageHeader
-        title="Dashboard"
-        description="Tổng quan vận hành MediaHub"
-        actions={statusMeta}
-      />
+    <div className="space-y-4 sm:space-y-8">
+      <div className="sm:hidden">
+        {statusMeta ?? (
+          <p className="text-sm text-muted-foreground">
+            Tổng quan vận hành MediaHub
+          </p>
+        )}
+      </div>
+      <div className="hidden sm:block">
+        <PageHeader
+          title="Dashboard"
+          description="Tổng quan vận hành MediaHub"
+          actions={statusMeta}
+        />
+      </div>
 
       {isError && (
         <PageError
@@ -76,19 +85,19 @@ export function OwnerDashboard() {
 
       <DashboardKpiGrid data={data} loading={isLoading} />
 
-      <Separator />
+      <Separator className="hidden sm:block" />
 
-      <div className="grid gap-6 lg:grid-cols-2">
+      <div className="grid gap-4 sm:gap-6 lg:grid-cols-2">
         <DashboardHostMetrics data={data} loading={isLoading} />
         <DashboardStorageSummary data={data} loading={isLoading} />
       </div>
 
-      <div className="grid gap-6 lg:grid-cols-2">
+      <div className="grid gap-4 sm:gap-6 lg:grid-cols-2">
         <DashboardQueueSummary data={data} loading={isLoading} />
         <DashboardStreamSummary data={data} loading={isLoading} />
       </div>
 
-      <div className="grid gap-6 lg:grid-cols-2">
+      <div className="grid gap-4 sm:gap-6 lg:grid-cols-2">
         <DashboardFailedJobs data={data} />
         <DashboardComponentsGrid data={data} loading={isLoading} />
       </div>

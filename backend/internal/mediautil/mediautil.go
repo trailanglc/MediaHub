@@ -1,6 +1,7 @@
 package mediautil
 
 import (
+	"fmt"
 	"path"
 	"path/filepath"
 	"strings"
@@ -12,6 +13,7 @@ const (
 	MaxChunkSize     = 32 * 1024 * 1024
 	MinChunkSize     = 256 * 1024
 	MaxChunks        = 10000
+	MaxNameLen       = 255
 )
 
 // SanitizeName returns a safe display name from the original filename.
@@ -32,15 +34,63 @@ func SanitizeName(original string) string {
 	if out == "" {
 		return "untitled"
 	}
-	if len(out) > 255 {
-		ext := path.Ext(out)
-		name := strings.TrimSuffix(out, ext)
-		if len(name) > 250 {
-			name = name[:250]
-		}
-		out = name + ext
+	return truncateName(out, MaxNameLen)
+}
+
+func truncateName(name string, maxLen int) string {
+	if maxLen <= 0 || len(name) <= maxLen {
+		return name
 	}
-	return out
+	ext, stem := splitNameExt(name)
+	room := maxLen - len(ext)
+	if room < 1 {
+		return name[:maxLen]
+	}
+	if len(stem) > room {
+		stem = stem[:room]
+	}
+	return stem + ext
+}
+
+func splitNameExt(name string) (ext, stem string) {
+	ext = path.Ext(name)
+	stem = strings.TrimSuffix(name, ext)
+	if stem == "" {
+		return "", name
+	}
+	return ext, stem
+}
+
+// UniqueSiblingName returns desired, or "stem (1).ext", "stem (2).ext", …
+// when desired is already present in taken. Keys in taken are exact names.
+func UniqueSiblingName(desired string, taken map[string]struct{}) string {
+	desired = strings.TrimSpace(desired)
+	if desired == "" {
+		desired = "untitled"
+	}
+	desired = truncateName(desired, MaxNameLen)
+	if taken == nil {
+		return desired
+	}
+	if _, exists := taken[desired]; !exists {
+		return desired
+	}
+	ext, stem := splitNameExt(desired)
+	for n := 1; ; n++ {
+		suffix := fmt.Sprintf(" (%d)", n)
+		room := MaxNameLen - len(suffix) - len(ext)
+		if room < 1 {
+			room = 1
+		}
+		s := stem
+		if len(s) > room {
+			s = s[:room]
+		}
+		candidate := s + suffix + ext
+		if _, exists := taken[candidate]; !exists {
+			return candidate
+		}
+	}
 }
 
 // DetectObjectType classifies media object type from MIME and extension.

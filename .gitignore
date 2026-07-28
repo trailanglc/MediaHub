@@ -2,6 +2,7 @@
 backend/.env
 frontend/.env.local
 deployments/.env
+deployments/docker-compose.override.yml
 
 # Go
 backend/bin/

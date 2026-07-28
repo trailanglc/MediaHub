@@ -52,6 +52,9 @@ export function ObjectActionsMenu({
 
   if (!hasAny) return null;
 
+  const itemClass =
+    "gap-3 px-3 py-2.5 text-[15px] sm:gap-1.5 sm:px-1.5 sm:py-1 sm:text-sm [&_svg:not([class*='size-'])]:size-5 sm:[&_svg:not([class*='size-'])]:size-4";
+
   return (
     <DropdownMenu>
       <DropdownMenuTrigger
@@ -61,51 +64,63 @@ export function ObjectActionsMenu({
           </Button>
         }
       />
-      <DropdownMenuContent align="end">
+      <DropdownMenuContent
+        align="end"
+        sideOffset={8}
+        className="w-auto min-w-56 p-1.5 sm:min-w-44 sm:p-1"
+      >
         {trashMode && onRestore && caps.update && (
-          <DropdownMenuItem onClick={onRestore}>
-            <Undo2Icon className="size-4" />
+          <DropdownMenuItem className={itemClass} onClick={onRestore}>
+            <Undo2Icon />
             Khôi phục
           </DropdownMenuItem>
         )}
         {trashMode && onPurge && caps.delete && (
           <>
             <DropdownMenuSeparator />
-            <DropdownMenuItem variant="destructive" onClick={onPurge}>
-              <SkullIcon className="size-4" />
+            <DropdownMenuItem
+              className={itemClass}
+              variant="destructive"
+              onClick={onPurge}
+            >
+              <SkullIcon />
               Xóa vĩnh viễn
             </DropdownMenuItem>
           </>
         )}
         {!trashMode && onPreview && object.type !== "folder" && (
-          <DropdownMenuItem onClick={onPreview}>
-            <EyeIcon className="size-4" />
+          <DropdownMenuItem className={itemClass} onClick={onPreview}>
+            <EyeIcon />
             Xem trước
           </DropdownMenuItem>
         )}
         {!trashMode && onRename && caps.update && (
-          <DropdownMenuItem onClick={onRename}>
-            <PencilIcon className="size-4" />
+          <DropdownMenuItem className={itemClass} onClick={onRename}>
+            <PencilIcon />
             Đổi tên
           </DropdownMenuItem>
         )}
         {!trashMode && onMove && caps.update && (
-          <DropdownMenuItem onClick={onMove}>
-            <FolderInputIcon className="size-4" />
+          <DropdownMenuItem className={itemClass} onClick={onMove}>
+            <FolderInputIcon />
             Di chuyển
           </DropdownMenuItem>
         )}
         {!trashMode && onShare && (caps.manage || caps.share) && (
-          <DropdownMenuItem onClick={onShare}>
-            <Share2Icon className="size-4" />
+          <DropdownMenuItem className={itemClass} onClick={onShare}>
+            <Share2Icon />
             Chia sẻ / quyền
           </DropdownMenuItem>
         )}
         {!trashMode && onDelete && caps.delete && (
           <>
             <DropdownMenuSeparator />
-            <DropdownMenuItem variant="destructive" onClick={onDelete}>
-              <Trash2Icon className="size-4" />
+            <DropdownMenuItem
+              className={itemClass}
+              variant="destructive"
+              onClick={onDelete}
+            >
+              <Trash2Icon />
               Xóa
             </DropdownMenuItem>
           </>

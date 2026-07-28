@@ -1,5 +1,5 @@
 import { env } from "@/lib/api/env";
-import { encryptPassword } from "@/lib/auth/password-crypto";
+import { passwordAuthFields } from "@/lib/auth/password-crypto";
 
 export class ApiError extends Error {
   constructor(
@@ -44,14 +44,27 @@ export async function apiFetch<T>(
   retried = false,
 ): Promise<T> {
   const { params, headers, ...init } = options;
-  const res = await fetch(buildURL(path, params), {
-    ...init,
-    headers: {
-      "Content-Type": "application/json",
-      ...headers,
-    },
-    credentials: "include",
-  });
+  let res: Response;
+  try {
+    res = await fetch(buildURL(path, params), {
+      ...init,
+      headers: {
+        "Content-Type": "application/json",
+        ...headers,
+      },
+      credentials: "include",
+    });
+  } catch (err) {
+    const detail =
+      err instanceof Error && err.message
+        ? err.message
+        : "network error";
+    throw new ApiError(
+      `Không kết nối được máy chủ API (${detail})`,
+      0,
+      { error: "network_error", message: detail },
+    );
+  }
 
   const text = await res.text();
   let data: unknown = null;
@@ -84,6 +97,22 @@ export async function apiFetch<T>(
   }
 
   return data as T;
+}
+
+/** True when the API host is unreachable (browser/network), not an auth failure. */
+export function isApiUnreachable(err: unknown): boolean {
+  if (err instanceof ApiError) {
+    return err.status === 0;
+  }
+  if (err instanceof TypeError) {
+    return true;
+  }
+  if (err instanceof Error) {
+    return /fetch failed|failed to fetch|networkerror|econnrefused|load failed/i.test(
+      err.message,
+    );
+  }
+  return false;
 }
 
 export type ComponentHealth = {
@@ -270,12 +299,12 @@ export async function createOwner(body: {
   password: string;
   setup_token?: string;
 }) {
-  const encrypted_password = await encryptPassword(body.password);
+  const passwordFields = await passwordAuthFields(body.password);
   return apiFetch<CreateOwnerResponse>("/api/setup/owner", {
     method: "POST",
     body: JSON.stringify({
       email: body.email,
-      encrypted_password,
+      ...passwordFields,
       setup_token: body.setup_token,
     }),
   });
@@ -290,12 +319,12 @@ export type AuthUser = {
 type AuthResponse = { user: AuthUser };
 
 export async function login(body: { email: string; password: string }) {
-  const encrypted_password = await encryptPassword(body.password);
+  const passwordFields = await passwordAuthFields(body.password);
   return apiFetch<AuthResponse>("/api/auth/login", {
     method: "POST",
     body: JSON.stringify({
       email: body.email,
-      encrypted_password,
+      ...passwordFields,
     }),
   });
 }
@@ -327,13 +356,13 @@ export async function createMember(body: {
   password: string;
   role: string;
 }) {
-  const encrypted_password = await encryptPassword(body.password);
+  const passwordFields = await passwordAuthFields(body.password);
   return apiFetch<{ user: Member }>("/api/members", {
     method: "POST",
     body: JSON.stringify({
       email: body.email,
       role: body.role,
-      encrypted_password,
+      ...passwordFields,
     }),
   });
 }
@@ -346,7 +375,7 @@ export async function updateMember(
   if (body.role) payload.role = body.role;
   if (body.status) payload.status = body.status;
   if (body.password) {
-    payload.encrypted_password = await encryptPassword(body.password);
+    Object.assign(payload, await passwordAuthFields(body.password));
   }
   return apiFetch<{ user: Member }>(`/api/members/${publicId}`, {
     method: "PATCH",
@@ -457,6 +486,13 @@ export type SettingsEditable = {
     audit_retention_days: number;
     trash_retention_days: number;
   };
+  download: {
+    max_concurrent: number;
+    chunk_concurrency: number;
+    job_timeout_seconds: number;
+    analyze_timeout_seconds: number;
+    queue_max_depth: number;
+  };
 };
 
 export type SettingsReadonly = {
@@ -493,6 +529,7 @@ export type SettingsPatch = {
   streaming?: Partial<SettingsEditable["streaming"]>;
   storage?: Partial<SettingsEditable["storage"]>;
   maintenance?: Partial<SettingsEditable["maintenance"]>;
+  download?: Partial<SettingsEditable["download"]>;
 };
 
 export function fetchSettings() {
@@ -800,6 +837,10 @@ export type ConvertProgress = {
 
 export type Video = {
   public_id: string;
+  /** Folder chứa file gốc trong File Manager */
+  parent_public_id?: string | null;
+  category_public_id?: string | null;
+  category_name?: string | null;
   name: string;
   mime_type?: string;
   size_bytes: number;
@@ -825,19 +866,36 @@ export type ListVideosResponse = {
   next_cursor?: number;
 };
 
+export type VideoCategory = {
+  public_id: string;
+  name: string;
+  sort_order: number;
+  video_count: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ListVideoCategoriesResponse = {
+  items: VideoCategory[];
+};
+
 export const VIDEOS_QUERY_KEY = "videos";
+export const VIDEO_CATEGORIES_QUERY_KEY = "video-categories";
 
 export function fetchVideos(params?: {
   hls_status?: string;
   q?: string;
   cursor?: string;
   limit?: string;
+  /** "uncategorized" | "all" | category public_id */
+  category?: string;
 }) {
   const query: Record<string, string> = {};
   if (params?.hls_status) query.hls_status = params.hls_status;
   if (params?.q) query.q = params.q;
   if (params?.cursor) query.cursor = params.cursor;
   if (params?.limit) query.limit = params.limit;
+  if (params?.category) query.category = params.category;
   return apiFetch<ListVideosResponse>("/api/videos", { params: query });
 }
 
@@ -845,8 +903,42 @@ export function fetchVideo(publicId: string) {
   return apiFetch<Video>(`/api/videos/${publicId}`);
 }
 
+export function fetchVideoCategories() {
+  return apiFetch<ListVideoCategoriesResponse>("/api/video-categories");
+}
+
+export function createVideoCategory(name: string) {
+  return apiFetch<VideoCategory>("/api/video-categories", {
+    method: "POST",
+    body: JSON.stringify({ name }),
+  });
+}
+
+export function patchVideoCategory(publicId: string, name: string) {
+  return apiFetch<VideoCategory>(`/api/video-categories/${publicId}`, {
+    method: "PATCH",
+    body: JSON.stringify({ name }),
+  });
+}
+
+export function deleteVideoCategory(publicId: string) {
+  return apiFetch<{ ok: boolean }>(`/api/video-categories/${publicId}`, {
+    method: "DELETE",
+  });
+}
+
+export function patchVideoCategoryAssignment(
+  videoPublicId: string,
+  categoryPublicId: string | null,
+) {
+  return apiFetch<Video>(`/api/videos/${videoPublicId}/category`, {
+    method: "PATCH",
+    body: JSON.stringify({ category_public_id: categoryPublicId }),
+  });
+}
+
 export type ConvertVideoInput = {
-  /** e.g. ["1080p","720p","480p"]; omit = all renditions that fit source height */
+  /** e.g. ["1440p","1080p","720p"]; omit = all renditions that fit source height */
   variants?: string[];
 };
 
@@ -891,6 +983,141 @@ export function patchStreamPolicy(
   return apiFetch<StreamPolicy>(`/api/videos/${publicId}/stream-policy`, {
     method: "PATCH",
     body: JSON.stringify(body),
+  });
+}
+
+// --- Download from URL ---
+
+export type DownloadCandidate = {
+  id: string;
+  title: string;
+  url?: string;
+  ext?: string;
+  height?: number;
+  width?: number;
+  fps?: number;
+  filesize?: number;
+  thumbnail?: string;
+  is_hls: boolean;
+  format_note?: string;
+  protocol?: string;
+};
+
+export type DownloadAnalyzeResult = {
+  kind: "direct" | "hls" | "website";
+  final_url?: string;
+  filename?: string;
+  content_type?: string;
+  title?: string;
+  candidates?: DownloadCandidate[];
+  source?: string;
+};
+
+export type DownloadJob = {
+  public_id: string;
+  source_url: string;
+  resolved_url?: string;
+  kind: string;
+  status: "pending" | "running" | "succeeded" | "failed" | "cancelled";
+  title?: string;
+  thumbnail_url?: string;
+  progress_pct: number;
+  progress_stage?: string;
+  bytes_done: number;
+  bytes_total: number;
+  video_public_id?: string;
+  last_error?: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ListDownloadJobsResponse = {
+  items: DownloadJob[];
+  next_cursor?: number;
+};
+
+export const DOWNLOAD_JOBS_QUERY_KEY = "download-jobs";
+
+/** SSE endpoint for live download job updates (cookie auth). */
+export function downloadJobsStreamURL() {
+  return buildURL("/api/download/jobs/stream");
+}
+
+export type DownloadJobEvent = {
+  public_id: string;
+  status: string;
+  kind?: string;
+  source_url?: string;
+  title?: string | null;
+  thumbnail_url?: string | null;
+  progress_pct: number;
+  progress_stage?: string;
+  bytes_done: number;
+  bytes_total: number;
+  video_public_id?: string | null;
+  last_error?: string | null;
+  created_at?: string;
+  updated_at?: string;
+};
+
+export function analyzeDownload(url: string) {
+  return apiFetch<DownloadAnalyzeResult>("/api/download/analyze", {
+    method: "POST",
+    body: JSON.stringify({ url }),
+  });
+}
+
+export type CreateDownloadJobInput = {
+  url: string;
+  resolved_url?: string;
+  kind?: string;
+  format_id?: string;
+  title?: string;
+  thumbnail_url?: string;
+  is_hls?: boolean;
+  ext?: string;
+  parent_public_id?: string;
+  candidate?: DownloadCandidate;
+};
+
+export function createDownloadJob(input: CreateDownloadJobInput) {
+  return apiFetch<DownloadJob>("/api/download/jobs", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export function fetchDownloadJobs(params?: {
+  cursor?: string;
+  limit?: string;
+}) {
+  const query: Record<string, string> = {};
+  if (params?.cursor) query.cursor = params.cursor;
+  if (params?.limit) query.limit = params.limit;
+  return apiFetch<ListDownloadJobsResponse>("/api/download/jobs", {
+    params: query,
+  });
+}
+
+export function fetchDownloadJob(publicId: string) {
+  return apiFetch<DownloadJob>(`/api/download/jobs/${publicId}`);
+}
+
+export function cancelDownloadJob(publicId: string) {
+  return apiFetch<{ ok: boolean }>(`/api/download/jobs/${publicId}/cancel`, {
+    method: "POST",
+  });
+}
+
+export function retryDownloadJob(publicId: string) {
+  return apiFetch<DownloadJob>(`/api/download/jobs/${publicId}/retry`, {
+    method: "POST",
+  });
+}
+
+export function deleteDownloadJob(publicId: string) {
+  return apiFetch<{ ok: boolean }>(`/api/download/jobs/${publicId}`, {
+    method: "DELETE",
   });
 }
 

@@ -29,6 +29,8 @@ type ConvertDeps struct {
 	Store            storage.ObjectStorage
 	FFmpegPath       string
 	FFprobePath      string
+	FFmpegHwAccel    string
+	FFmpegVAAPIDevice string
 	JobTimeout       time.Duration
 	DeletePrefix     func(ctx context.Context, prefix string) error
 	HeartbeatTouch   func(ctx context.Context) error
@@ -71,6 +73,14 @@ func (p *ConvertProcessor) ProcessTask(ctx context.Context, t *asynq.Task) error
 	if p.deps.HeartbeatTouch != nil {
 		_ = p.deps.HeartbeatTouch(ctx)
 	}
+
+	timeout := p.deps.JobTimeout
+	if timeout <= 0 {
+		timeout = 2 * time.Hour
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
 	var payload ConvertPayload
 	if err := json.Unmarshal(t.Payload(), &payload); err != nil {
 		return err
@@ -139,6 +149,8 @@ func (p *ConvertProcessor) ProcessTask(ctx context.Context, t *asynq.Task) error
 		FFmpegPath:  p.deps.FFmpegPath,
 		FFprobePath: p.deps.FFprobePath,
 		Timeout:     p.deps.JobTimeout,
+		HwAccel:     p.deps.FFmpegHwAccel,
+		VAAPIDevice: p.deps.FFmpegVAAPIDevice,
 	}
 	if p.deps.GovernorEnabled {
 		cfg.Threads = lim.FFmpegThreads
@@ -175,15 +187,22 @@ func (p *ConvertProcessor) ProcessTask(ctx context.Context, t *asynq.Task) error
 
 	p.report(ctx, videoID, "thumbnail", 92)
 	thumbPath := filepath.Join(tmpDir, "thumb.jpg")
-	thumbKey := storage.ThumbnailObjectKey(videoPID)
+	thumbKey := ""
 	if err := transcode.ExtractThumbnail(ctx, cfg, sourcePath, thumbPath); err == nil {
 		if f, err := os.Open(thumbPath); err == nil {
 			st, _ := f.Stat()
-			_ = p.deps.Store.PutObject(ctx, thumbKey, f, st.Size(), "image/jpeg")
+			key := storage.ThumbnailObjectKey(videoPID)
+			if err := p.deps.Store.PutObject(ctx, key, f, st.Size(), "image/jpeg"); err == nil {
+				thumbKey = key
+				_ = videos.SetThumbnailKey(ctx, row.Asset.ID, thumbKey)
+				_ = objects.SetThumbnailKey(ctx, row.Media.ID, thumbKey)
+			} else if p.deps.Log != nil {
+				p.deps.Log.Debug("convert.thumbnail_upload_failed", zap.Error(err), zap.String("video_public_id", videoPID.String()))
+			}
 			f.Close()
-			_ = videos.SetThumbnailKey(ctx, row.Asset.ID, thumbKey)
-			_ = objects.SetThumbnailKey(ctx, row.Media.ID, thumbKey)
 		}
+	} else if p.deps.Log != nil {
+		p.deps.Log.Debug("convert.thumbnail_extract_failed", zap.Error(err), zap.String("video_public_id", videoPID.String()))
 	}
 
 	p.report(ctx, videoID, "finalize", 98)

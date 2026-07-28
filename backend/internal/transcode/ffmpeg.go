@@ -27,6 +27,10 @@ type Config struct {
 	Timeout     time.Duration
 	// Threads limits ffmpeg/ffprobe CPU use (0 = ffmpeg default).
 	Threads int
+	// HwAccel: auto | vaapi | none (default auto).
+	HwAccel string
+	// VAAPIDevice is the DRM render node (default /dev/dri/renderD128).
+	VAAPIDevice string
 }
 
 // ProgressFunc reports convert stage and 0–100 percent.
@@ -34,10 +38,7 @@ type ProgressFunc func(stage string, percent int)
 
 // scaleVF returns a video filter that scales to max height and forces even dimensions for libx264.
 func scaleVF(maxHeight int) string {
-	return fmt.Sprintf(
-		"scale=-2:%d:force_original_aspect_ratio=decrease,scale=trunc(iw/2)*2:trunc(ih/2)*2",
-		maxHeight,
-	)
+	return scaleVFSharp(maxHeight)
 }
 
 func Probe(ctx context.Context, cfg Config, inputPath string) (*ProbeResult, error) {
@@ -149,6 +150,12 @@ func ConvertToHLS(ctx context.Context, cfg Config, inputPath, outDir string, var
 		step = 1
 	}
 
+	hw := ResolveHwAccel(cfg.FFmpegPath, cfg.HwAccel, cfg.VAAPIDevice)
+	device := cfg.VAAPIDevice
+	if device == "" {
+		device = "/dev/dri/renderD128"
+	}
+
 	for i, v := range variants {
 		if onProgress != nil {
 			onProgress("encode_"+v.Name, basePct+i*step)
@@ -164,35 +171,43 @@ func ConvertToHLS(ctx context.Context, cfg Config, inputPath, outDir string, var
 				maxH--
 			}
 		}
-		preset := "fast"
-		if i == 0 {
-			preset = "medium" // rendition cao nhất: chất lượng tốt hơn cho bản 1080p
-		}
-		// Pin profile/level so the advertised master CODECS string is exact, and force a
-		// keyframe at every segment boundary (sc_threshold 0 + force_key_frames) so each
-		// segment is independently decodable — required for clean ABR switching and fast seek.
+		// CPU fallback uses slow: user prioritizes sharpness over encode time.
+		preset := "slow"
 		levelStr := h264LevelString(encodedWidth(maxH, src), maxH, src.FPS)
-		args := []string{
-			"-y", "-i", inputPath,
-			"-vf", scaleVF(maxH),
-			"-c:v", "libx264", "-preset", preset, "-b:v", EncodeBitrate(v, src),
-			"-profile:v", "high", "-level:v", levelStr,
-			"-sc_threshold", "0",
-			"-force_key_frames", "expr:gte(t,n_forced*6)",
-			"-c:a", "aac", "-b:a", "128k", "-ac", "2",
-			"-f", "hls",
-			"-hls_time", "6",
-			"-hls_playlist_type", "vod",
-			"-hls_flags", "independent_segments",
-			"-hls_segment_filename", filepath.Join(variantDir, "segment_%05d.ts"),
-			filepath.Join(variantDir, "index.m3u8"),
+		br := EncodeBitrate(v, src)
+
+		// High-quality sources (≥1080p or high bitrate): slightly lower VAAPI QP for sharpness.
+		qp := 17
+		if src.Height >= 1080 || src.Bitrate >= 6_000_000 {
+			qp = 15
 		}
-		if cfg.Threads > 0 {
+
+		var args []string
+		useVAAPI := hw == HwAccelVAAPI
+		if useVAAPI {
+			args = buildVAAPIEncodeArgs(inputPath, variantDir, device, maxH, br, levelStr, qp)
+		} else {
+			args = buildCPUEncodeArgs(inputPath, variantDir, maxH, br, levelStr, preset)
+		}
+		if cfg.Threads > 0 && !useVAAPI {
 			args = append([]string{"-threads", strconv.Itoa(cfg.Threads)}, args...)
 		}
 		cmd := exec.CommandContext(ctx, cfg.FFmpegPath, args...)
 		if out, err := cmd.CombinedOutput(); err != nil {
-			return fmt.Errorf("ffmpeg %s: %w: %s", v.Name, err, trimFFmpegLog(string(out)))
+			if useVAAPI {
+				// Absolute quality: never leave a failed GPU encode — retry on libx264 slow.
+				args = buildCPUEncodeArgs(inputPath, variantDir, maxH, br, levelStr, preset)
+				if cfg.Threads > 0 {
+					args = append([]string{"-threads", strconv.Itoa(cfg.Threads)}, args...)
+				}
+				cmd = exec.CommandContext(ctx, cfg.FFmpegPath, args...)
+				if out2, err2 := cmd.CombinedOutput(); err2 != nil {
+					return fmt.Errorf("ffmpeg %s: vaapi failed (%v); cpu fallback: %w: %s",
+						v.Name, err, err2, trimFFmpegLog(string(out2)+" | vaapi: "+string(out)))
+				}
+			} else {
+				return fmt.Errorf("ffmpeg %s: %w: %s", v.Name, err, trimFFmpegLog(string(out)))
+			}
 		}
 	}
 
@@ -210,7 +225,7 @@ func trimFFmpegLog(s string) string {
 	return s
 }
 
-const audioBitrateBps = 128_000
+const audioBitrateBps = 192_000
 
 func writeMasterPlaylist(outDir string, variants []HLSVariant, src SourceProfile) error {
 	var lines []string
@@ -335,7 +350,7 @@ func ExtractThumbnail(ctx context.Context, cfg Config, inputPath, outputPath str
 	defer cancel()
 	args := []string{
 		"-y", "-ss", "1", "-i", inputPath,
-		"-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2",
+		"-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2:flags=lanczos",
 		"-frames:v", "1", "-q:v", "2",
 		outputPath,
 	}

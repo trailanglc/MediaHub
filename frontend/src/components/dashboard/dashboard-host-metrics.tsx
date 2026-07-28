@@ -13,9 +13,9 @@ export function DashboardHostMetrics({
 }) {
   if (loading) {
     return (
-      <div className="grid gap-4 sm:grid-cols-3">
+      <div className="grid grid-cols-3 gap-2 sm:gap-4">
         {[1, 2, 3].map((i) => (
-          <Skeleton key={i} className="h-36 rounded-xl" />
+          <Skeleton key={i} className="h-24 rounded-xl sm:h-36" />
         ))}
       </div>
     );
@@ -34,26 +34,31 @@ export function DashboardHostMetrics({
   const diskPercent = disk?.used_percent ?? 0;
 
   return (
-    <section aria-label="Tài nguyên máy chủ" className="space-y-3">
-      <h2 className="text-lg font-semibold tracking-tight">Tài nguyên host</h2>
-      <div className="grid gap-4 sm:grid-cols-3">
+    <section aria-label="Tài nguyên máy chủ" className="space-y-2 sm:space-y-3">
+      <h2 className="text-base font-semibold tracking-tight sm:text-lg">
+        Tài nguyên host
+      </h2>
+      <div className="grid grid-cols-3 gap-2 sm:gap-4">
         <MetricCard
           title="CPU"
           value={`${host.cpu_percent.toFixed(1)}%`}
           sub="Mức sử dụng CPU máy chủ API"
           percent={host.cpu_percent}
+          compact
         />
         <MetricCard
           title="RAM"
           value={`${host.memory.used_percent.toFixed(1)}%`}
           sub="Bộ nhớ máy chủ"
           percent={host.memory.used_percent}
+          compact
         />
         <MetricCard
           title={disk ? `Disk ${disk.path}` : "Disk"}
           value={`${diskPercent.toFixed(1)}%`}
           sub={disk ? `Ổ đĩa ${disk.path}` : "Ổ đĩa hệ thống"}
           percent={diskPercent}
+          compact
         />
       </div>
     </section>

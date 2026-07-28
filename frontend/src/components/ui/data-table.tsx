@@ -1,4 +1,6 @@
-export function DataTable({ children }: { children: React.ReactNode }) {
+import type { ComponentProps, ReactNode } from "react";
+
+export function DataTable({ children }: { children: ReactNode }) {
   return (
     <div className="overflow-x-auto rounded-lg border border-border">
       <table className="w-full text-left text-sm">{children}</table>
@@ -6,7 +8,7 @@ export function DataTable({ children }: { children: React.ReactNode }) {
   );
 }
 
-export function DataTableHead({ children }: { children: React.ReactNode }) {
+export function DataTableHead({ children }: { children: ReactNode }) {
   return (
     <thead className="bg-muted/50 text-xs font-medium uppercase tracking-wide text-muted-foreground">
       {children}
@@ -14,25 +16,27 @@ export function DataTableHead({ children }: { children: React.ReactNode }) {
   );
 }
 
-export function DataTableBody({ children }: { children: React.ReactNode }) {
+export function DataTableBody({ children }: { children: ReactNode }) {
   return <tbody className="divide-y divide-border">{children}</tbody>;
 }
 
 export function DataTableRow({
   children,
   className = "",
-}: {
-  children: React.ReactNode;
-  className?: string;
-}) {
-  return <tr className={`bg-card ${className}`.trim()}>{children}</tr>;
+  ...props
+}: ComponentProps<"tr">) {
+  return (
+    <tr className={`bg-card ${className}`.trim()} {...props}>
+      {children}
+    </tr>
+  );
 }
 
 export function DataTableCell({
   children,
   className = "",
 }: {
-  children: React.ReactNode;
+  children: ReactNode;
   className?: string;
 }) {
   return <td className={`px-4 py-3 ${className}`}>{children}</td>;
@@ -42,7 +46,7 @@ export function DataTableTh({
   children,
   className = "",
 }: {
-  children: React.ReactNode;
+  children: ReactNode;
   className?: string;
 }) {
   return <th className={`px-4 py-3 ${className}`}>{children}</th>;

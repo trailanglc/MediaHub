@@ -26,10 +26,12 @@ func SetAuthCookies(c *gin.Context, cfg CookieConfig, accessToken, refreshToken 
 		Secure:   cfg.Secure,
 		SameSite: http.SameSiteLaxMode,
 	})
+	// Path=/ so Next.js proxy can see the cookie on app navigations and
+	// refresh an expired access token instead of bouncing to /login.
 	http.SetCookie(c.Writer, &http.Cookie{
 		Name:     CookieRefresh,
 		Value:    refreshToken,
-		Path:     "/api/auth",
+		Path:     "/",
 		MaxAge:   int(refreshTTL.Seconds()),
 		HttpOnly: true,
 		Secure:   cfg.Secure,
@@ -47,6 +49,16 @@ func ClearAuthCookies(c *gin.Context, cfg CookieConfig) {
 		Secure:   cfg.Secure,
 		SameSite: http.SameSiteLaxMode,
 	})
+	http.SetCookie(c.Writer, &http.Cookie{
+		Name:     CookieRefresh,
+		Value:    "",
+		Path:     "/",
+		MaxAge:   -1,
+		HttpOnly: true,
+		Secure:   cfg.Secure,
+		SameSite: http.SameSiteLaxMode,
+	})
+	// Clear legacy Path=/api/auth refresh cookies from older builds.
 	http.SetCookie(c.Writer, &http.Cookie{
 		Name:     CookieRefresh,
 		Value:    "",

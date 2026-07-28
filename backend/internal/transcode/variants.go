@@ -25,15 +25,18 @@ type SourceProfile struct {
 }
 
 // KnownVariants lists renditions the platform supports (highest first).
-// 360p is included so weak networks / fast start have a lightweight rendition to begin on.
+// Home-lab quality ladder: 2K / 1080p / 720p only (no SD).
 var KnownVariants = []HLSVariant{
-	{Name: "1080p", Height: 1080, Bitrate: "5000k", TargetBps: 5_000_000},
-	{Name: "720p", Height: 720, Bitrate: "2800k", TargetBps: 2_800_000},
-	{Name: "480p", Height: 480, Bitrate: "1400k", TargetBps: 1_400_000},
-	{Name: "360p", Height: 360, Bitrate: "800k", TargetBps: 800_000},
+	{Name: "1440p", Height: 1440, Bitrate: "14000k", TargetBps: 14_000_000},
+	{Name: "1080p", Height: 1080, Bitrate: "10000k", TargetBps: 10_000_000},
+	{Name: "720p", Height: 720, Bitrate: "6000k", TargetBps: 6_000_000},
 }
 
 const sourceHeightSlack = 16
+
+// qualityBitrateBoost keeps encode bitrate above measured source so VAAPI/CPU
+// do not crush detail (user accepts larger HLS output).
+const qualityBitrateBoost = 1.45
 
 var variantsByName map[string]HLSVariant
 
@@ -54,7 +57,6 @@ func VariantNames() []string {
 }
 
 // VariantFitsSource: chỉ chặn upscale độ phân giải (không chặn theo bitrate ladder).
-// Video YouTube 1080p thường ~1.5–2.5 Mbps — vẫn cho encode 1080p/720p với bitrate scale theo nguồn.
 func VariantFitsSource(v HLSVariant, src SourceProfile) bool {
 	if src.Height > 0 && v.Height > src.Height+sourceHeightSlack {
 		return false
@@ -122,12 +124,12 @@ func defaultVariantsForSource(src SourceProfile) []HLSVariant {
 	}
 	h := src.Height
 	if h <= 0 {
-		h = 480
+		h = 720
 	}
 	if h%2 != 0 {
 		h--
 	}
-	br := EncodeBitrate(HLSVariant{Height: h, TargetBps: 1_400_000}, src)
+	br := EncodeBitrate(HLSVariant{Height: h, TargetBps: 6_000_000, Bitrate: "6000k"}, src)
 	return []HLSVariant{{
 		Name:      "source",
 		Height:    h,
@@ -136,7 +138,8 @@ func defaultVariantsForSource(src SourceProfile) []HLSVariant {
 	}}
 }
 
-// EncodeBitrate picks -b:v from source measured bitrate and rendition height (area ratio), not fixed ladder caps.
+// EncodeBitrate picks -b:v from source measured bitrate and rendition height (area ratio).
+// Prefers generous bitrate (quality / sharpness) over small files.
 func EncodeBitrate(v HLSVariant, src SourceProfile) string {
 	renditionH := v.Height
 	if src.Height > 0 && src.Height < renditionH {
@@ -154,7 +157,7 @@ func EncodeBitrate(v HLSVariant, src SourceProfile) string {
 	if areaRatio > 1 {
 		areaRatio = 1
 	}
-	target := int64(float64(src.Bitrate) * areaRatio * 1.1)
+	target := int64(float64(src.Bitrate) * areaRatio * qualityBitrateBoost)
 
 	floor := bitrateFloorForHeight(renditionH)
 	if target < floor {
@@ -163,21 +166,20 @@ func EncodeBitrate(v HLSVariant, src SourceProfile) string {
 	if v.TargetBps > 0 && target > v.TargetBps {
 		target = v.TargetBps
 	}
-	// Cùng độ phân giải nguồn: không vượt bitrate đo được (tránh file phình không thêm chi tiết).
-	if renditionH >= src.Height-sourceHeightSlack && target > src.Bitrate {
-		target = src.Bitrate
-	}
+	// Không cắt theo bitrate nguồn — chấp nhận file lớn để giữ độ sắc nét.
 	return formatBitrateKbps(target)
 }
 
 func bitrateFloorForHeight(h int) int64 {
 	switch {
+	case h >= 1440:
+		return 8_000_000
 	case h >= 1080:
-		return 1_800_000
+		return 5_000_000
 	case h >= 720:
-		return 1_000_000
+		return 3_000_000
 	default:
-		return 550_000
+		return 2_000_000
 	}
 }
 
